@@ -174,15 +174,17 @@ Task View、Alt+Tab、Mission Control、Command+Tab などは残す。
 
 macOS の full-screen Space 制御は platform 固有の追加機能として後から検討する。
 
-## D-018: 公開前提にはしない
+## D-018: 個人利用を優先するが、repository は public 運用にする
 
 **Status:** Accepted
 
-当面は個人利用を優先する。
+当面のプロダクト判断は自分が日常利用しやすいことを優先し、公開ユーザー向けの広い互換性保証やサポート体制は v1 の目的にしない。
 
-署名、インストーラ、ストア配布、公開向け onboarding、互換性保証は v1 完了条件へ入れない。
+一方、`window-tabs` 自体には秘密情報や個人データを含める必要がないため、repository は public 運用とする。
 
-ただし macOS ではローカル利用でも Accessibility 権限の扱いを明示する。
+public repository にすることで、GitHub Releases の installer / updater metadata / updater artifact を認証なしで取得できる構成を採用する。
+
+repository に秘密鍵、token、個人設定、ローカルパスなどの秘密情報は commit しない。
 
 ## D-019: 何も接続されていないプリセットでも待機グループを作れる
 
@@ -216,6 +218,35 @@ UI を作り込む前に次を確認する。
 Windows の通常操作として maximize / Snap Layouts を使った後でもグループを維持する。
 
 最大化 state そのものを他タブへ同期するか、最終 frame だけを同期するかは spike の結果で決める。
+
+## D-022: Windows v1 に installer と in-app updater を含める
+
+**Status:** Accepted
+
+Windows v1 は開発環境から起動できるだけでは完了としない。
+
+正式な導入方法は Tauri の NSIS `setup.exe` とし、初回インストール後は Tauri Updater からアプリ内更新できる状態を v1 の完了条件に含める。
+
+更新フローはユーザー操作で開始し、勝手にアプリを再起動しない。
+
+プリセットや設定は installer directory と分離し、更新・再インストールで失われないようにする。
+
+## D-023: GitHub Releases を配布・Updater の単一基盤にする
+
+**Status:** Accepted
+
+自前の update server や配布専用 repository は持たない。
+
+public な `YuyaIsh/window-tabs` の GitHub Releases を正式な配布先とし、次を同じ release へ置く。
+
+- NSIS installer
+- updater artifact
+- updater signature
+- `latest.json`
+
+release workflow は GitHub Actions + `tauri-action` を使って定型化する。
+
+Updater の private signing key は GitHub Actions Secrets と安全な別バックアップで管理し、repository には含めない。
 
 ## 後から決めてよい事項
 
