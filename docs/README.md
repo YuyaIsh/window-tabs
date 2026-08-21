@@ -4,7 +4,7 @@
 
 Windows を先に実装するが、macOS を後から追加できる構成を前提にする。
 
-repository は public 運用とし、初回導入は GitHub Releases の Windows installer、以後の更新は Tauri Updater から行う。自前の update server や配布専用 repository は持たない。
+運用方針として repository は public にし、初回導入は GitHub Releases の Windows installer、以後の更新は Tauri Updater から行う。自前の update server や配布専用 repository は持たない。実際の public 化は Phase 6 で repository history の秘密情報チェックを通してから行う。
 
 ## Documents
 
