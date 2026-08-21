@@ -15,13 +15,13 @@ Windows を先に実装するが、macOS を後から追加できる構成を前
 
 ## 開発順
 
-1. Phase 0: Windows 10 / 11 の技術 spike で Task View、タブバー host、実ウィンドウ D&D、最大化 / Snap の成立を確認する
+1. Phase 0: Windows 10 の技術 spike で Task View、タブバー host、実ウィンドウ D&D、最大化 / Snap の成立を確認する
 2. Phase 1: 共通モデル、platform interface、task tray shell を作る
 3. Phase 2: Windows の基本タブグループを作る
 4. Phase 3: 実ウィンドウ D&D とタブ D&D を追加する
 5. Phase 4: 複数ディスプレイ、DPI、maximize / Snap を固める
 6. Phase 5: プリセット、matching、再起動後の再接続を作る
-7. Phase 6: Windows 10 / 11 の regression を通して Windows v1 を APPROVE する
+7. Phase 6: Windows 10 の regression を通して Windows v1 を APPROVE する
 8. Phase 7: macOS の技術 spike を行う
 9. Phase 8: macOS 版を Windows v1 と同じ共通仕様へ揃える
 10. Phase 9: 2 OS の共通 regression と schema 互換を確認する
@@ -30,7 +30,7 @@ Windows を先に実装するが、macOS を後から追加できる構成を前
 
 ## v1 の対象
 
-- Windows 10 / 11
+- Windows 10
 - タスクトレイ常駐
 - 複数の既存ウィンドウを同じ位置・サイズに重ねる
 - GUI タブからウィンドウ単位で切り替える

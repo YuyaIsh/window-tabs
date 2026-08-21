@@ -205,7 +205,7 @@ UI を作り込む前に次を確認する。
 - タブバー host をタスクバー / Alt+Tab / Task View から除外できる
 - Ctrl + 実ウィンドウ D&D を安定して検知できる
 - 最大化 / Snap Layouts と frame 同期が共存できる
-- Windows 10 / 11 の両方で基本挙動が成立する
+- Windows 10 で基本挙動が成立する
 
 失敗した項目は無理に実装で隠さず、先に仕様を修正する。
 
@@ -216,6 +216,18 @@ UI を作り込む前に次を確認する。
 Windows の通常操作として maximize / Snap Layouts を使った後でもグループを維持する。
 
 最大化 state そのものを他タブへ同期するか、最終 frame だけを同期するかは spike の結果で決める。
+
+## D-022: Windows v1 の対象 OS は Windows 10 に限定する
+
+**Status:** Accepted
+
+v1 の実機検証と回帰対象は Windows 10 とする。Windows 11 と Snap Layouts は将来の互換性確認として扱い、Windows v1 の承認条件には含めない。
+
+## D-023: 明示指示があれば未確認の phase を残して実装を継続できる
+
+**Status:** Accepted
+
+実機 GUI の未確認項目は PASS と扱わず、phase review に残す。ただしユーザーが明示的に継続を指示した場合は後続実装を開始できる。Windows v1 の最終 APPROVE は保留し、未確認項目をすべて実施するまで完了とは扱わない。
 
 ## 後から決めてよい事項
 

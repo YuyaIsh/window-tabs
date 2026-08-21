@@ -113,3 +113,21 @@ PASS
 - Unresolved P0-P2 findings: **0**
 
 **APPROVED**
+
+## Review round 4: v1 OS scope change
+
+### Change
+
+The user limited Windows v1 to Windows 10. Windows 11 and Snap Layouts are no
+longer approval requirements; they remain future compatibility work.
+
+### Documentation alignment
+
+PASS
+
+- `SPEC.md`: v1 completion and spike criteria now target Windows 10 standard Snap.
+- `ARCHITECTURE.md`: frame synchronization references Windows 10 standard Snap.
+- `DECISIONS.md`: D-022 records the Windows 10-only v1 scope.
+- `IMPLEMENTATION_PLAN.md`: Phase 0 and Phase 6 require Windows 10 evidence only.
+
+Result: **APPROVED**

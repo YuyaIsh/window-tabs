@@ -207,7 +207,7 @@ focus イベントを受けた際は、対象ウィンドウを再度 activate �
 
 通常 frame とは別に window state を取得する。
 
-Windows 11 Snap Layouts や maximize の操作後、最終 frame を group layout へ反映する。
+Windows 10 の標準 Snap や maximize の操作後、最終 frame を group layout へ反映する。
 
 最大化 state 自体を全 tab へ同期する方式と、restore 後に同じ frame を適用する方式は spike で比較して決める。
 
@@ -403,7 +403,7 @@ UI を作り込む前に、独立した小さい検証コードで次を確認�
 5. タブバー操作後に対象ウィンドウへ自然に focus を戻せる
 6. Ctrl + native window move の start / end と drop target を安定して取得できる
 7. maximize / Snap Layouts 後に group frame を復元できる
-8. Windows 10 / 11 で上記が成立する
+8. Windows 10 で上記が成立する
 
 この spike が失敗した項目は、backend 実装で無理に隠さず仕様を修正する。
 

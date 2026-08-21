@@ -74,6 +74,8 @@ APPROVED
 
 OS GUI の確認を自動実行できない環境では、未実行のまま代理で PASS にしない。そのフェーズは `BLOCKED: MANUAL VERIFICATION` とし、必要な確認手順と期待結果を出す。実機結果が得られた後に approve loop を再開する。
 
+ユーザーが明示的に「未実行の確認を残したまま実装を先へ進める」と指示した場合に限り、後続フェーズの実装は開始してよい。この例外は APPROVE ではない。未確認項目と P0〜P2 finding は残したままにし、Windows v1 の最終 APPROVE はすべての実機確認を終えるまで行わない。
+
 ### APPROVED 条件
 
 全フェーズ共通で以下を満たす。
@@ -123,7 +125,7 @@ Approval
 
 ### Goal
 
-製品コードを広げる前に、Windows 10 / 11 上で今回の設計が成立するか確認する。
+製品コードを広げる前に、Windows 10 上で今回の設計が成立するか確認する。
 
 ### Verify
 
@@ -149,7 +151,7 @@ Approval
 
 ### Behavior verification
 
-Windows 10 と Windows 11 の両方で基本確認する。
+Windows 10 で基本確認する。
 
 - Chrome + Notion
 - Chrome の別ウィンドウ 2 個
@@ -160,15 +162,14 @@ Windows 10 と Windows 11 の両方で基本確認する。
 - tab bar click → 対象へ focus
 - maximize → restore
 - Windows 10: 通常の Snap
-- Windows 11: Snap / Snap Layouts
 - 可能なら DPI の異なる 2 画面間移動
 
-Windows 10 / 11 のどちらかを実行できない場合、未確認側を PASS 扱いせず Phase 0 を `BLOCKED: MANUAL VERIFICATION` にする。
+Windows 10 の実機確認を実行できない場合、Phase 0 を `BLOCKED: MANUAL VERIFICATION` にする。
 
 ### APPROVE
 
 - 1〜12 の結果が phase review に記録されている
-- Windows 10 / 11 の基本検証が両方 PASS
+- Windows 10 の基本検証が PASS
 - 不成立項目があれば先に仕様 / architecture を修正している
 - v1 を阻害する未解決制約がない
 - Windows backend で採用する API / event route が決まっている
@@ -401,7 +402,7 @@ runtime ID に依存せず、現在存在する window を安全に preset へ�
 
 ### Goal
 
-Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰す。
+Windows 10 で日常利用できる状態まで回帰と edge case を潰す。
 
 ### Harden
 
@@ -432,12 +433,12 @@ Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰�
 - unresolved preset group
 - 0-connected waiting preset
 
-Windows 10 と Windows 11 の両方で実施する。
+Windows 10 で実施する。
 
 ### APPROVE
 
 - `SPEC.md` の Windows v1 complete conditions がすべて PASS
-- Win10 / Win11 regression PASS
+- Windows 10 regression PASS
 - 日常利用を止める known defect が 0
 - Phase 0 で成立確認した Task View / tab bar host / D&D / Snap が製品コードでも PASS
 
