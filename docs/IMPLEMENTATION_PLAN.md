@@ -123,21 +123,22 @@ Approval
 
 ### Goal
 
-製品コードを広げる前に、Windows 上で今回の設計が成立するか確認する。
+製品コードを広げる前に、Windows 10 / 11 上で今回の設計が成立するか確認する。
 
 ### Verify
 
 1. 外部トップレベルウィンドウを列挙できる
-2. 複数ウィンドウを同じ位置・サイズへ移動できる
-3. タブクリック相当のユーザー操作から対象を前面化できる
-4. foreground / move / resize / create / destroy を監視できる
-5. 重なった管理対象が Task View / Alt+Tab では個別に扱われる
-6. 自作タブバー host を Task View / Alt+Tab から実用上除外できる
-7. タブバー操作後に focus がタブバーへ残らず対象ウィンドウへ戻せる
-8. `Ctrl + 実ウィンドウ D&D` を検出できる
-9. D&D 中に drop target のトップレベルウィンドウを特定できる
-10. maximize / restore / Snap 後の frame を追跡できる
-11. DPI が異なるディスプレイ間の座標変換方針が成立する
+2. Chrome の複数ウィンドウを別 `HWND` として区別できる
+3. 複数ウィンドウを同じ位置・サイズへ移動できる
+4. タブクリック相当のユーザー操作から対象を前面化できる
+5. foreground / move / resize / create / destroy を監視できる
+6. 重なった管理対象が Task View / Alt+Tab では個別に扱われる
+7. 自作タブバー host を Task View / Alt+Tab / taskbar から実用上除外できる
+8. タブバー操作後に focus がタブバーへ残らず対象ウィンドウへ戻せる
+9. `Ctrl + 実ウィンドウ D&D` を検出できる
+10. D&D 中に drop target のトップレベルウィンドウを特定できる
+11. maximize / restore / Snap 後の frame を追跡できる
+12. DPI が異なるディスプレイ間の座標変換方針が成立する
 
 ### Approach
 
@@ -148,19 +149,26 @@ Approval
 
 ### Behavior verification
 
+Windows 10 と Windows 11 の両方で基本確認する。
+
 - Chrome + Notion
 - Chrome の別ウィンドウ 2 個
 - Terminal + Chrome
 - `Win + Tab` から背後の管理対象を選択
 - `Alt + Tab` から管理対象を選択
+- tab bar が taskbar に通常アプリとして出ない
 - tab bar click → 対象へ focus
 - maximize → restore
-- Snap 左右 → restore
+- Windows 10: 通常の Snap
+- Windows 11: Snap / Snap Layouts
 - 可能なら DPI の異なる 2 画面間移動
+
+Windows 10 / 11 のどちらかを実行できない場合、未確認側を PASS 扱いせず Phase 0 を `BLOCKED: MANUAL VERIFICATION` にする。
 
 ### APPROVE
 
-- 1〜11 の結果が phase review に記録されている
+- 1〜12 の結果が phase review に記録されている
+- Windows 10 / 11 の基本検証が両方 PASS
 - 不成立項目があれば先に仕様 / architecture を修正している
 - v1 を阻害する未解決制約がない
 - Windows backend で採用する API / event route が決まっている
@@ -194,6 +202,14 @@ Windows 実装を進めても macOS 追加時に共通部分を書き直さな�
 - macOS backend 用 boundary / cfg skeleton
 - logging / error model
 - test harness / platform mock
+- runtime ID を永続化できない persistence model
+- 大きな管理画面を常駐させない shell
+- Windows task tray の最小入口
+  - app quit
+  - window picker / new group 入口
+  - preset menu の placeholder
+
+macOS 追加時は同じ application shell を menu bar へ接続する。
 
 ### Review focus
 
@@ -202,10 +218,12 @@ Windows 実装を進めても macOS 追加時に共通部分を書き直さな�
 - UI が Win32 を直接呼ばない
 - persistence が runtime ID を保存できない構造になっている
 - interface 名や semantics が Windows の事情に寄りすぎていない
+- tray / menu-bar 差分が platform host の差だけで済む
 
 ### APPROVE
 
 - Windows backend を差し替えられる最小アプリが起動する
+- task tray から最小入口を操作できる
 - platform mock で core test が動く
 - architecture boundary finding が 0 件
 
@@ -219,6 +237,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 
 - top-level window enumeration
 - `+` Window Picker
+- task tray から new group / Window Picker を開く
 - window 単位で group へ追加
 - 同一 frame へ配置
 - GUI tab selection → activate
@@ -234,6 +253,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - Chrome + Notion + Terminal
 - Chrome 2 window を別 tab として追加
 - `+` から同一アプリの別 window を選択
+- task tray から group 作成
 - Task View / Alt+Tab / taskbar から選択 → active tab sync
 - 3 → 2 → 1 tab でも bar 維持
 - minimize → tab select → restore
@@ -324,12 +344,15 @@ runtime ID に依存せず、現在存在する window を安全に preset へ�
 ### Implement
 
 - preset persistence
+- task tray から preset selection
+- preset management screen
 - current group → preset
 - user-defined tab name
+- 保存時に曖昧な tab の matcher を調整できる UI
 - Windows matching hints
   - executable
   - window class
-  - title pattern
+  - user-defined / stable title pattern
   - 取得できる document / path 系情報
 - matching engine
 - `connected` / `unresolved` / `minimized`
@@ -341,27 +364,35 @@ runtime ID に依存せず、現在存在する window を安全に preset へ�
 - 0 connected でも waiting group / unresolved tabs を表示
 - `HWND` を永続化しない
 
+現在のウィンドウタイトルを保存時に無条件で matcher 化しない。title pattern はユーザーが明示した条件、または安定性を確認できる属性だけを使う。
+
+空の preset を 0 から編集する高度な UI は v1 後へ送ってよい。v1 では current group から保存する経路を完成させる。
+
 ### Test cases
 
 - app 1 / candidate 1
-- same app multi-window / unique title
+- same app multi-window / unique stable title
 - same app multi-window / same title
 - changed HWND
 - target app not running
 - target created after preset apply
-- Chrome title changes
+- Chrome page title changes
+- 保存時タイトルが変わっても誤 matcher が作られない
 
 ### Behavior verification
 
 - save → `window-tabs` restart → reconnect
+- task tray から preset apply
 - PC restart → OS / app が復元した window へ reconnect
 - Notion 未起動 preset → Notion を起動しない
+- 0 connected preset → waiting tab bar
 - 後から Notion 起動 → reconnect candidate
 - 識別不能な Claude 2 windows → 誤接続せず manual assignment
 
 ### APPROVE
 
 - ambiguous candidate を推測だけで connect しない
+- transient な現在タイトルを勝手に matcher として固定しない
 - runtime IDs が persistence にない
 - 0 / 1 / multiple candidate transition が test 済み
 - PC restart を含む実機確認 PASS
@@ -386,7 +417,7 @@ Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰�
 - elevated process / permission mismatch
 - transient / utility / invisible window filtering
 - event debounce / coalescing
-- task tray
+- task tray regression
 - log / diagnostic access
 
 ### Regression matrix
@@ -399,6 +430,7 @@ Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰�
 - 2 groups simultaneously
 - 1-tab group
 - unresolved preset group
+- 0-connected waiting preset
 
 Windows 10 と Windows 11 の両方で実施する。
 
@@ -429,6 +461,7 @@ Windows 10 と Windows 11 の両方で実施する。
 - Mission Control / Dock selection → active tab sync
 - `Command + 実ウィンドウ D&D`
 - NSScreen / multi-display
+- menu bar shell へ共通 application actions を接続
 
 native full-screen Space は対象外。
 
@@ -437,6 +470,7 @@ native full-screen Space は対象外。
 - Windows 用 core / preset schema を壊さず backend を接続できる
 - core 変更が必要なら Windows 固有前提を取り除く修正として説明できる
 - Mission Control / native tab bar / D&D が成立
+- task tray と同じ共通 action を menu bar から呼べる
 
 ## Phase 8: macOS parity
 
@@ -449,6 +483,7 @@ Windows v1 の共通仕様を macOS へ実装する。
 - macOS WindowBackend
 - DisplayBackend
 - native tab bar host
+- menu bar host
 - `Command + D&D`
 - focus sync
 - multi-display
@@ -465,6 +500,7 @@ Windows の主要 regression に加えて以下を実施する。
 - Dock activation
 - normal Spaces usage
 - Accessibility permission denied / granted
+- menu bar から preset / new group / quit
 
 ### APPROVE
 
