@@ -23,7 +23,8 @@ src/
 ├─ ui/
 │  ├─ tab-bar/
 │  ├─ preset-selector/
-│  └─ window-picker/
+│  ├─ window-picker/
+│  └─ settings/
 ├─ core/
 │  ├─ groups/
 │  ├─ presets/
@@ -51,6 +52,19 @@ UI -> Core -> Platform interface
 
 `core` から特定 OS backend を直接参照しない。
 
+## アプリの常駐形態
+
+大きな管理ウィンドウを常時表示しない。
+
+platform 側で launcher host を持つ。
+
+- Windows: system tray
+- macOS: menu bar
+
+launcher からプリセット選択、新規グループ、設定画面を開く。
+
+プリセット内の接続済みウィンドウが 0 件でも、保存済み frame にタブバーだけを作成できるようにする。
+
 ## 共通モデル
 
 ### WindowId
@@ -77,15 +91,16 @@ type WindowInfo = {
   title: string;
   frame: Rect;
   displayId: DisplayId;
+  state: "normal" | "minimized" | "maximized" | "unknown";
 };
 ```
 
-`appId` は OS ごとに意味が違ってよい。
+`appId` は runtime で対象アプリをまとめるための OS 内識別子として使う。
 
 - Windows: executable identity を backend で正規化した値
 - macOS: bundle identifier を基本とする
 
-OS 固有の照合情報は `platformHints` に分離する。
+永続 matcher では OS 固有情報を別フィールドへ保存する。
 
 ### TabGroup
 
@@ -93,12 +108,15 @@ OS 固有の照合情報は `platformHints` に分離する。
 type TabGroup = {
   id: string;
   name?: string;
+  presetId?: string;
   tabs: TabEntry[];
-  activeTabId: string;
+  activeTabId?: string;
   displayId: DisplayId;
   frame: NormalizedFrame;
 };
 ```
+
+`activeTabId` は全タブ unresolved の待機グループでは存在しなくてよい。
 
 1 タブになっても `TabGroup` を破棄しない。
 
@@ -120,7 +138,7 @@ type TabEntry = {
 
 ## Platform interface
 
-TypeScript 側へ直接 OS API を露出せず、Tauri command / event を介して次の能力を提供する。
+TypeScript 側へ直接 OS API を露出せず、Tauri command / event を介して能力を提供する。
 
 ```ts
 interface WindowBackend {
@@ -140,11 +158,14 @@ type WindowEvent =
   | { type: "created"; window: WindowInfo }
   | { type: "destroyed"; id: WindowId }
   | { type: "focused"; id: WindowId }
-  | { type: "moved"; id: WindowId; frame: Rect }
-  | { type: "resized"; id: WindowId; frame: Rect }
+  | { type: "moveResizeStart"; id: WindowId }
+  | { type: "frameChanged"; id: WindowId; frame: Rect }
+  | { type: "moveResizeEnd"; id: WindowId; frame: Rect }
   | { type: "minimized"; id: WindowId }
   | { type: "restored"; id: WindowId };
 ```
+
+OS ごとの細かいイベント差は backend 内で正規化する。
 
 ## Windows backend
 
@@ -158,14 +179,37 @@ type WindowEvent =
 - `SetWindowPos`: 位置・サイズ・Z order
 - `SetForegroundWindow`: 前面化
 - `ShowWindow`: 最小化解除
-- `MonitorFromWindow` / monitor enumeration: ディスプレイ処理
-- `SetWinEventHook`: focus、move、resize、create、destroy などの監視
+- monitor API: ディスプレイ処理
+- `SetWinEventHook`: focus、move/size、create、destroy などの監視
+- `WindowFromPoint` など: D&D 終了時の対象判定
 
 ### 前面化
 
 Windows は任意プロセスからの `SetForegroundWindow` を制限するため、タブクリックなど明示的なユーザー操作から呼ぶ経路を基本にする。
 
 focus イベントを受けた際は、対象ウィンドウを再度 activate せず、`activeTabId` だけ同期する。イベントループを防ぐ。
+
+### 実ウィンドウ D&D
+
+最初から低レベルのグローバルマウスフックへ依存しない。
+
+第一候補は次の流れ。
+
+1. OS の move/size start event を監視する
+2. 移動開始時に Ctrl 状態を確認する
+3. 移動中は cursor position と管理可能ウィンドウ一覧から drop target を表示する
+4. move/size end で cursor 下の対象を確定する
+5. target があれば group 化し、なければ通常移動として終了する
+
+この方式で成立しないアプリだけがある場合に、より低レベルな pointer hook を検討する。
+
+### 最大化 / Snap
+
+通常 frame とは別に window state を取得する。
+
+Windows 11 Snap Layouts や maximize の操作後、最終 frame を group layout へ反映する。
+
+最大化 state 自体を全 tab へ同期する方式と、restore 後に同じ frame を適用する方式は spike で比較して決める。
 
 ## macOS backend
 
@@ -189,11 +233,13 @@ React で描画する内容は共通にするが、ホストウィンドウの�
 
 - 枠なし
 - 対象ウィンドウ上端へ追従
-- タブをクリックしても不要にフォーカスを奪わない
-- OS 標準のウィンドウ一覧で通常アプリウィンドウとして目立たない
+- タブをクリックしても不要にフォーカスを残さない
+- タスクバー / Alt+Tab / Task View / Mission Control の通常ウィンドウとして出さない
 - D&D 可能
 
 Windows と macOS で必要な native window flag が違うため、タブバー用 native host の設定を platform abstraction にする。
+
+この要求が通常の Tauri window 設定だけで満たせない場合は、Web UI の描画は共通のまま native host だけ platform 固有実装にする。
 
 ## Native window D&D
 
@@ -213,12 +259,10 @@ platform 層で検出する。
 
 ```text
 Windows
-modifier + global pointer / window movement detection
-+ HWND hit testing
+move/size events + modifier state + hit testing
 
 macOS
-modifier + global event monitoring
-+ Accessibility / window hit testing
+global event / AX movement observation + modifier state + hit testing
 ```
 
 platform 層は共通層へ次のようなイベントだけを渡す。
@@ -236,12 +280,12 @@ type NativeWindowDragEvent =
 
 ```ts
 type WindowMatchRule = {
-  appKey: string;
   titlePattern?: string;
   documentHint?: string;
-  platformHints?: {
+  platformHints: {
     windows?: {
       executable?: string;
+      executablePath?: string;
       className?: string;
     };
     macos?: {
@@ -252,6 +296,8 @@ type WindowMatchRule = {
 };
 ```
 
+Windows と macOS のプリセットファイル形式は共通にできるが、同じタブを両 OS で自動照合できること自体は v1 の要求にしない。各 OS の matcher を同じ entry に保存できる形だけ確保する。
+
 ### matching の原則
 
 - 一意性の高い属性から使う
@@ -261,6 +307,8 @@ type WindowMatchRule = {
 - 複数候補: unresolved のまま手動選択
 
 スコアリングを導入する場合でも、一定スコア以上なら必ず自動接続する設計にはしない。候補同士に明確な差がある場合だけ自動確定する。
+
+現在タイトルは候補情報として保存してよいが、その値を自動的に永続 `titlePattern` へ昇格させない。
 
 ## プリセット永続化
 
@@ -295,11 +343,18 @@ type WindowMatchRule = {
 
 一致するディスプレイがなければ primary display へフォールバックする。
 
-## イベント競合対策
+## move / resize のイベント競合対策
 
 `window-tabs` 自身が `setFrame` した結果として move / resize イベントが返る。
 
-そのため、platform event と user operation を区別する仕組みを持つ。
+また、ユーザーが active window をドラッグしている間に他の全 window へ即時伝播すると、操作が重くなる可能性がある。
+
+次を行う。
+
+- 自分が発行した mutation を短時間追跡する
+- 連続 frame event を coalesce する
+- active window の move/size end では必ず group frame を確定する
+- 自分由来の event から再帰的に伝播しない
 
 例:
 
@@ -310,8 +365,6 @@ type MutationGuard = {
   expiresAt: number;
 };
 ```
-
-自分で発生させた直後のイベントから再度全ウィンドウへ同じ操作を伝播しない。
 
 ## セキュリティ / 権限
 
@@ -333,12 +386,35 @@ type PlatformCapabilities = {
   focusObservation: boolean;
   displayMove: boolean;
   windowRestoreFromMinimize: boolean;
+  nativeWindowState: boolean;
 };
 ```
 
 機能差が出た場合は capability で UI を調整する。
 
+## Windows implementation spike
+
+UI を作り込む前に、独立した小さい検証コードで次を確認する。
+
+1. `EnumWindows` から Chrome などの複数トップレベルウィンドウを安定して列挙できる
+2. 2 個以上を同一 frame に置いても Task View に個別表示される
+3. Task View / Alt+Tab から前面化された HWND を `SetWinEventHook` で検知できる
+4. タブバー host をタスクバー / Alt+Tab / Task View から除外できる
+5. タブバー操作後に対象ウィンドウへ自然に focus を戻せる
+6. Ctrl + native window move の start / end と drop target を安定して取得できる
+7. maximize / Snap Layouts 後に group frame を復元できる
+8. Windows 10 / 11 で上記が成立する
+
+この spike が失敗した項目は、backend 実装で無理に隠さず仕様を修正する。
+
 ## 実装順
+
+### Phase 0: Windows spike
+
+- Task View / Alt+Tab
+- tab bar host
+- native window D&D
+- maximize / Snap
 
 ### Phase 1: Windows core
 
@@ -351,6 +427,7 @@ type PlatformCapabilities = {
 
 ### Phase 2: Windows UX
 
+- tray launcher
 - タブバー
 - `+` picker
 - Ctrl + native window D&D
@@ -364,18 +441,21 @@ type PlatformCapabilities = {
 - プリセット保存
 - matching
 - unresolved state
+- 0 connected の待機グループ
 - 再起動後の再接続
 
 ### Phase 4: Windows integration
 
 - Task View / Alt+Tab からの focus 同期
 - 最小化 / 復元
+- 最大化 / Snap
 - ディスプレイ切断
 - edge case 修正
 
 ### Phase 5: macOS
 
 - macOS backend
+- menu bar launcher
 - native tab bar host
 - native window D&D
 - Mission Control / Command+Tab focus 同期
