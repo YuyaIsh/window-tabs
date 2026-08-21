@@ -9,6 +9,7 @@ Status: **APPROVED**
 - `docs/SPEC.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DECISIONS.md`
+- `docs/DISTRIBUTION.md`
 
 ## Review round 1
 
@@ -55,7 +56,7 @@ Result: **FIXED**
 
 Result: **FIXED**
 
-## Review round 3: final
+## Review round 3
 
 ### Dependency review
 
@@ -103,10 +104,87 @@ PASS
 - P0〜P2 が残ると approve できない
 - phase review の evidence を保存する
 
+Result: **PASS**
+
+## Review round 4: public repository / distribution / updater
+
+### New decisions reviewed
+
+- repository は public 運用
+- GitHub Releases を installer / updater の正式な単一配布先にする
+- Windows v1 に NSIS installer と Tauri Updater を含める
+- 初回だけ installer を手動取得し、以後は in-app update を基本にする
+- updater private signing key は repository に含めない
+- macOS でも同じ GitHub Releases / updater architecture を再利用する
+
+### Findings
+
+1. public 化前に repository history の secret を確認しないと、現在の tree から削除しても履歴に秘密情報が残る可能性があった
+2. updater のコードと workflow が存在するだけで Phase 6 を approve でき、実際の N → N+1 更新が検証されない余地があった
+3. updater signing key を GitHub Secrets だけに保存すると、紛失時に既存 installation へ update を配信できなくなるリスクがあった
+4. user data の保存先が installer directory のままだと update / repair install で preset を失う可能性があった
+5. public repository にするのに private-repo authentication fallback を残すと、不要な PAT / auth 実装が入り込む余地があった
+
+### Fixes
+
+- Phase 6 に public 化前の repository history / tracked secret check を追加
+- public 化完了と Release asset の未認証取得を Phase 6 acceptance criteria に追加
+- version N と N+1 を使った実 update smoke test を必須化
+- download / signature verify / install / restart / persistence まで実機確認するよう変更
+- updater failure 時に旧 version が壊れないことを確認項目へ追加
+- signing private key は GitHub Secrets に加えて安全な別バックアップを必須化
+- preset / settings は OS application data directory へ保存し installer directory から分離
+- updater endpoint を public GitHub Releases の `latest.json` に固定し、PAT / auth header を通常フローから排除
+- `DISTRIBUTION.md` を Phase 6 の acceptance contract として実装プランへ直接組み込み
+
+Result: **FIXED**
+
+## Review round 5: final
+
+### Dependency review
+
+PASS
+
+- updater / distribution は product core が安定した Phase 6 で導入する
+- persistence の保存場所は Phase 1 から app data directory を前提にし、Phase 6 で移行事故を起こさない
+- repository public 化は release workflow を使う前に secret review を通す
+- macOS は Windows の release / updater architecture を再利用する
+
+### Security review
+
+PASS
+
+- updater private key / password を source に含めない
+- public key は source に含めてよい
+- public 化前に repository history を確認する
+- release log / artifact の secret exposure も acceptance criteria に含む
+- updater client に GitHub PAT を埋め込まない
+
+### Update reliability review
+
+PASS
+
+- N → N+1 の実更新を必須化
+- signature verification を通す
+- update 後の preset / settings persistence を確認する
+- update failure 時の旧 version 継続を確認する
+- installer / updater artifact は GitHub Actions から再現可能に生成する
+
+### Cross-platform review
+
+PASS
+
+- updater UX / action は shared application layer に置ける
+- Windows は NSIS、macOS は DMG / app bundle と配布形式だけ platform 差分にできる
+- public GitHub Releases / versioning / updater metadata は共通化できる
+
 ## Final approval
 
 - Specification alignment: **PASS**
 - Architecture boundary: **PASS**
+- Distribution strategy: **PASS**
+- Update security: **PASS**
+- Update reliability: **PASS**
 - Phase dependency order: **PASS**
 - Verification coverage: **PASS**
 - Approval criteria enforceability: **PASS**

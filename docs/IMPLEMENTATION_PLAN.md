@@ -6,6 +6,8 @@ Windows 版を先に日常利用できる状態まで作り、その後 macOS ba
 
 Windows 先行でも共通 core / UI に Windows 固有型や Win32 の都合を持ち込まない。各フェーズは実装だけでは完了とせず、レビュー、動作確認、修正、再確認まで終えて `APPROVED` になってから次へ進む。
 
+Windows v1 は開発環境から起動できるだけでは完了としない。public GitHub repository の Releases から初回インストールでき、その後は Tauri Updater でアプリ内更新できる状態まで含める。
+
 ## 進行単位
 
 原則として **1 フェーズ = 1 branch / 1 PR** とする。
@@ -22,6 +24,7 @@ main
 - 次フェーズは前フェーズの approve / merge 後に開始する
 - 仕様変更を含む場合は実装だけ先行させず docs を同じ PR で更新する
 - PR の説明には phase review へのリンクを載せる
+- release / updater の実装は `DISTRIBUTION.md` も acceptance contract として扱う
 
 ## フェーズ共通の approve loop
 
@@ -56,14 +59,16 @@ APPROVED
 - stale window reference
 - OS 境界
 - test coverage
+- persistence / migration
+- release / updater phase では secret exposure と rollback path
 
 可能なら実装担当とは別の reviewer agent / review context を使う。別 reviewer を使えない場合でも、実装完了後に diff ベースで独立した review pass を必ず行う。
 
 ### Review finding の扱い
 
-- P0: データ破損、誤操作、重大な安全性問題
-- P1: 主要フローが成立しない、誤ウィンドウ操作、クラッシュ
-- P2: acceptance criteria 違反、再現性のある回帰、OS 境界違反
+- P0: データ破損、秘密情報漏洩、重大な誤操作
+- P1: 主要フローが成立しない、誤ウィンドウ操作、クラッシュ、更新後に起動不能
+- P2: acceptance criteria 違反、再現性のある回帰、OS 境界違反、更新で設定消失
 - P3: acceptance criteria に影響しない軽微な UX / 保守性改善
 
 `APPROVED` には P0 / P1 / P2 が 0 件であることが必要。P3 を後続へ送る場合は phase review の `Deferred` に残す。
@@ -203,11 +208,13 @@ Windows 実装を進めても macOS 追加時に共通部分を書き直さな�
 - logging / error model
 - test harness / platform mock
 - runtime ID を永続化できない persistence model
+- app data directory を使う設定保存の土台
 - 大きな管理画面を常駐させない shell
 - Windows task tray の最小入口
   - app quit
   - window picker / new group 入口
   - preset menu の placeholder
+  - update action の placeholder
 
 macOS 追加時は同じ application shell を menu bar へ接続する。
 
@@ -219,6 +226,7 @@ macOS 追加時は同じ application shell を menu bar へ接続する。
 - persistence が runtime ID を保存できない構造になっている
 - interface 名や semantics が Windows の事情に寄りすぎていない
 - tray / menu-bar 差分が platform host の差だけで済む
+- user data が installer directory に保存されない
 
 ### APPROVE
 
@@ -397,13 +405,13 @@ runtime ID に依存せず、現在存在する window を安全に preset へ�
 - 0 / 1 / multiple candidate transition が test 済み
 - PC restart を含む実機確認 PASS
 
-## Phase 6: Windows v1 hardening
+## Phase 6: Windows v1 hardening, distribution and updater
 
 ### Goal
 
-Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰す。
+Windows 10 / 11 で日常利用でき、通常の installer で導入でき、以後のバージョンをアプリ内更新できる状態まで完成させる。
 
-### Harden
+### Product hardening
 
 - Task View
 - Alt+Tab
@@ -420,6 +428,58 @@ Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰�
 - task tray regression
 - log / diagnostic access
 
+### Public repository readiness
+
+実際に repository を public にする前に確認する。
+
+- repository history に secret / token / private key がない
+- 個人用設定や秘密を含む local file が tracked されていない
+- updater private key を repository に置かない設計になっている
+- public にしてよい updater public key / workflow / docs だけが source に入る
+
+確認後、`YuyaIsh/window-tabs` を public にし、GitHub Releases を未認証で取得できる状態にする。
+
+### Distribution implementation
+
+`DISTRIBUTION.md` に従って実装する。
+
+- NSIS `setup.exe`
+- current-user installation
+- Start menu / task tray 起動
+- uninstall
+- app data directory への user data 保存
+- 必要なら Windows login 時の自動起動設定
+
+### Updater implementation
+
+- Tauri v2 updater plugin
+- `createUpdaterArtifacts: true`
+- updater public key を app config へ設定
+- updater private key / password を GitHub Actions Secrets へ設定
+- private key を安全な別場所にもバックアップ
+- public GitHub Release の `latest.json` を endpoint にする
+- task tray に `Check for updates`
+- 起動時 update check
+- 同一起動中の過剰な update check を抑制
+- new version notification
+- user-triggered download / verify / install
+- user-triggered restart
+- failure 時の現行 version 維持 / error 表示
+
+### Release pipeline
+
+GitHub Actions + `tauri-action` を使う。
+
+version tag を基本 trigger とし、最低限次を自動生成する。
+
+- NSIS installer
+- updater artifact
+- updater signature
+- `latest.json`
+- GitHub Release
+
+通常の commit / PR merge だけでは release しない。
+
 ### Regression matrix
 
 - Chrome + Chrome
@@ -434,10 +494,32 @@ Windows 10 / 11 で日常利用できる状態まで回帰と edge case を潰�
 
 Windows 10 と Windows 11 の両方で実施する。
 
+### Distribution behavior verification
+
+最低でも version N と N+1 の2バージョンを使って実機確認する。
+
+1. public GitHub Release asset を未認証で取得する
+2. clean Windows に version N の NSIS installer を入れる
+3. installer 版を task tray から起動する
+4. preset / setting を作る
+5. version N+1 を tag から GitHub Actions で release する
+6. version N から N+1 を `latest.json` で検知する
+7. `Update` で download / signature verify / install する
+8. 新 version を起動する
+9. preset / setting が残っていることを確認する
+10. updater error を意図的に発生させ、旧 version が壊れないことを確認する
+11. uninstall できることを確認する
+12. Actions log / Release artifact に signing secret が露出していないことを確認する
+
 ### APPROVE
 
 - `SPEC.md` の Windows v1 complete conditions がすべて PASS
+- `DISTRIBUTION.md` の Windows v1 distribution acceptance criteria がすべて PASS
 - Win10 / Win11 regression PASS
+- public GitHub Releases から初回 installer と updater artifact を未認証で取得できる
+- version N → N+1 の in-app update が PASS
+- update / repair install 後も preset / settings が保持される
+- signing private key / password が repository / artifact / logs に存在しない
 - 日常利用を止める known defect が 0
 - Phase 0 で成立確認した Task View / tab bar host / D&D / Snap が製品コードでも PASS
 
@@ -447,7 +529,7 @@ Windows 10 と Windows 11 の両方で実施する。
 
 ### Goal
 
-共通 core / UI / preset schema を維持したまま macOS backend が成立するか確認する。
+共通 core / UI / preset schema / updater architecture を維持したまま macOS backend が成立するか確認する。
 
 ### Verify
 
@@ -462,6 +544,7 @@ Windows 10 と Windows 11 の両方で実施する。
 - `Command + 実ウィンドウ D&D`
 - NSScreen / multi-display
 - menu bar shell へ共通 application actions を接続
+- Windows と同じ update action を menu bar から呼べる
 
 native full-screen Space は対象外。
 
@@ -471,6 +554,7 @@ native full-screen Space は対象外。
 - core 変更が必要なら Windows 固有前提を取り除く修正として説明できる
 - Mission Control / native tab bar / D&D が成立
 - task tray と同じ共通 action を menu bar から呼べる
+- updater shared logic を Windows 専用に分岐させず再利用できる
 
 ## Phase 8: macOS parity
 
@@ -491,6 +575,9 @@ Windows v1 の共通仕様を macOS へ実装する。
   - bundle identifier
   - Accessibility document / identifier 等
 - permission / error state
+- DMG / app bundle
+- macOS updater artifact
+- Apple signing / notarization（配布要件に応じて）
 
 ### Behavior verification
 
@@ -500,19 +587,21 @@ Windows の主要 regression に加えて以下を実施する。
 - Dock activation
 - normal Spaces usage
 - Accessibility permission denied / granted
-- menu bar から preset / new group / quit
+- menu bar から preset / new group / update / quit
+- macOS release artifact から install / update
 
 ### APPROVE
 
 - Windows 共通挙動を壊さない
 - Mission Control selection → active tab sync
 - Windows-only branch / type が core / UI に追加されていない
+- shared updater / release architecture を再利用できている
 
 ## Phase 9: Cross-platform stabilization
 
 ### Goal
 
-2 OS 対応後の shared regression と schema 互換を確認する。
+2 OS 対応後の shared regression、schema 互換、release pipeline を確認する。
 
 ### Verify
 
@@ -522,6 +611,8 @@ Windows の主要 regression に加えて以下を実施する。
 - Windows / macOS CI build
 - OS ごとの smoke procedure
 - logging
+- updater shared logic
+- GitHub Release の OS 別 artifact
 - docs sync
 
 ### APPROVE
@@ -529,7 +620,8 @@ Windows の主要 regression に加えて以下を実施する。
 - 同じ preset schema を両 OS が読める
 - OS-specific hints がない preset でも壊れない
 - Windows v1 regression と macOS regression が再度 PASS
-- `SPEC.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `IMPLEMENTATION_PLAN.md` が実装と一致
+- GitHub Release pipeline が Windows / macOS artifact を再現可能に生成する
+- `SPEC.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `DISTRIBUTION.md`, `IMPLEMENTATION_PLAN.md` が実装と一致
 
 ## Review priority
 
@@ -539,9 +631,11 @@ Windows の主要 regression に加えて以下を実施する。
 2. OS 本来の window 操作を壊さないか
 3. core state と real window state がずれないか
 4. restart 後に誤接続しないか
-5. Windows 実装が macOS 追加を阻害していないか
-6. event loop / race / stale reference がないか
-7. UX / visual details
+5. update / install で user data を失わないか
+6. signing secret / token を露出していないか
+7. Windows 実装が macOS 追加を阻害していないか
+8. event loop / race / stale reference がないか
+9. UX / visual details
 
 ## 仕様変更が必要になった場合
 
@@ -549,9 +643,9 @@ Windows の主要 regression に加えて以下を実施する。
 
 1. phase を `APPROVED` にしない
 2. 制約と再現条件を phase review に記録
-3. `SPEC.md` / `ARCHITECTURE.md` / `DECISIONS.md` を必要に応じて修正
+3. `SPEC.md` / `ARCHITECTURE.md` / `DECISIONS.md` / `DISTRIBUTION.md` を必要に応じて修正
 4. acceptance criteria を更新
 5. implementation / tests を修正
 6. approve loop を最初から再実行
 
-ユーザー判断が必要なのは、既に確定したプロダクト挙動を変える場合だけとする。内部実装、test、review finding の修正は `APPROVED` になるまで自律的に続ける。
+ユーザー判断が必要なのは、既に確定したプロダクト挙動や配布方針を変える場合だけとする。内部実装、test、review finding の修正は `APPROVED` になるまで自律的に続ける。
