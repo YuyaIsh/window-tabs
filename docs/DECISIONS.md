@@ -31,12 +31,15 @@ OS 依存:
 - 実ウィンドウ D&D
 - ディスプレイ API
 - タブバー native host の window flag
+- tray / menu bar の host
 
 ## D-003: Tauri + React / TypeScript + Rust を採用する
 
 **Status:** Accepted
 
 Windows だけなら別の選択肢もあるが、後から macOS を追加するときに UI・状態管理・プリセットを二重実装しないことを優先する。
+
+通常の Tauri window だけでタブバー要件を満たせない場合は、描画 UI は共通のまま native host 部分だけ OS 固有にする。
 
 ## D-004: 実ウィンドウは埋め込まない
 
@@ -54,6 +57,8 @@ Windows だけなら別の選択肢もあるが、後から macOS を追加す�
 
 Task View / Mission Control では各実ウィンドウを個別に表示し、そこで選ばれたウィンドウを対応タブへ同期する。
 
+この挙動は Windows の spike で先に成立確認する。
+
 ## D-006: グループ作成は修飾キー + 実ウィンドウ D&D を基本操作にする
 
 **Status:** Accepted
@@ -62,6 +67,8 @@ Task View / Mission Control では各実ウィンドウを個別に表示し、�
 - macOS: Command
 
 `+` からのウィンドウ選択も常に用意する。
+
+Windows では最初から低レベルマウスフックへ依存せず、move/size start/end と modifier state、hit testing で成立するか先に試す。
 
 ## D-007: 新しく作られた同一アプリのウィンドウを自動追加しない
 
@@ -103,6 +110,8 @@ OS / アプリ自身のセッション復元を利用し、`window-tabs` がア�
 ユーザーが `AIチャット`、`開発Chrome` などの安定した名前を付けられるようにする。
 
 実ウィンドウタイトルは matching の材料として扱うだけで、タブ表示名の永続 ID として扱わない。
+
+現在タイトルを保存しただけで、自動的に永続 `titlePattern` として使わない。
 
 ## D-011: 再起動後は runtime window ID を復元しない
 
@@ -175,6 +184,39 @@ macOS の full-screen Space 制御は platform 固有の追加機能として後
 
 ただし macOS ではローカル利用でも Accessibility 権限の扱いを明示する。
 
+## D-019: 何も接続されていないプリセットでも待機グループを作れる
+
+**Status:** Accepted
+
+プリセット選択時に一致する実ウィンドウが 0 件でも、保存済み位置へ細いタブバーを表示する。
+
+全タブを unresolved として保持し、対象ウィンドウが後から作られたら再照合する。
+
+このため `TabGroup.activeTabId` は runtime 上で未設定を許可する。
+
+## D-020: 本実装前に Windows 固有の成立条件を spike で確認する
+
+**Status:** Accepted
+
+UI を作り込む前に次を確認する。
+
+- Task View に重なった管理対象ウィンドウが個別表示される
+- Task View / Alt+Tab からの focus を検知できる
+- タブバー host をタスクバー / Alt+Tab / Task View から除外できる
+- Ctrl + 実ウィンドウ D&D を安定して検知できる
+- 最大化 / Snap Layouts と frame 同期が共存できる
+- Windows 10 / 11 の両方で基本挙動が成立する
+
+失敗した項目は無理に実装で隠さず、先に仕様を修正する。
+
+## D-021: Windows の最大化 / Snap を壊さない
+
+**Status:** Accepted
+
+Windows の通常操作として maximize / Snap Layouts を使った後でもグループを維持する。
+
+最大化 state そのものを他タブへ同期するか、最終 frame だけを同期するかは spike の結果で決める。
+
 ## 後から決めてよい事項
 
 次は実装を止める判断ではない。Windows の試作結果を見て決める。
@@ -185,4 +227,5 @@ macOS の full-screen Space 制御は platform 固有の追加機能として後
 - title pattern の UI を単純な部分一致にするか、正規表現まで露出するか
 - グループ全体のディスプレイ移動ショートカット
 - minimized tab の表示方法
+- Windows maximize state の同期方法
 - macOS の Space 対応をどこまで追加するか
