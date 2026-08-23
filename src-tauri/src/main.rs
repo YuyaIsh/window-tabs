@@ -552,6 +552,7 @@ fn main() {
             windows_backend::get_window_frame,
             windows_backend::set_window_frame,
             open_group_host,
+            close_group_host,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -592,5 +593,14 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
     .skip_taskbar(true)
     .build()
     .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
+    let label = format!("group-{group_id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        window.close().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }

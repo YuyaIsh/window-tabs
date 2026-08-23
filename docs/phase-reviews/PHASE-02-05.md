@@ -40,8 +40,8 @@ review remains blocked. This record is not an approval substitute.
 
 ## Automated checks
 
-- `pnpm test` — PASS (20 tests after controller, duplicate ownership, display
-  persistence, geometry coverage, and settled-frame coalescing)
+- `pnpm test` — PASS (21 tests after controller, duplicate ownership, display
+  persistence, geometry coverage, settled-frame coalescing, and host closing)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS
@@ -70,6 +70,8 @@ review remains blocked. This record is not an approval substitute.
    an input-blocking transparent 640px window.
 6. Maximize, restore, and use normal Windows 10 Snap on the active tab. Confirm
    other tabs and the host follow exactly once.
+7. Dissolve a secondary-host group, or move its final tab into another group.
+   Confirm its native host window closes rather than remaining as an empty bar.
 
 ## Current review result
 
