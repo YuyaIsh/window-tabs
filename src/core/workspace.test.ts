@@ -34,6 +34,12 @@ describe("workspace", () => {
     const next = reconnectWorkspace(workspace, [window("one")]);
     expect(next.groups[1].tabs[0].status).toBe("unresolved");
   });
+  it("rejects a new group that reuses a connected runtime window", () => {
+    const first = newGroup(window("one"));
+    const duplicate = newGroup(window("one"));
+    const next = addGroup(addGroup(emptyWorkspace(), first), duplicate);
+    expect(next.groups).toEqual([first]);
+  });
   it("dissolves a one-tab group only through the explicit command", () => {
     const group = newGroup(window("one"));
     expect(dissolveGroup(addGroup(emptyWorkspace(), group), group.id).groups).toHaveLength(0);

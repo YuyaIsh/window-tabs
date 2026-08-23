@@ -40,8 +40,8 @@ review remains blocked. This record is not an approval substitute.
 
 ## Automated checks
 
-- `pnpm test` — PASS (18 tests after controller, duplicate ownership, display
-  persistence, and geometry coverage)
+- `pnpm test` — PASS (20 tests after controller, duplicate ownership, display
+  persistence, geometry coverage, and settled-frame coalescing)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS
