@@ -3,6 +3,7 @@ import type { WindowBackend } from "./windowBackend";
 
 /** In-memory platform adapter for core/UI integration tests. */
 export class MockWindowBackend implements WindowBackend {
+  readonly groupHosts = new Set<string>();
   constructor(public windows: WindowInfo[] = [], public displays: DisplayInfo[] = []) {}
 
   async listWindows() { return this.windows; }
@@ -16,6 +17,7 @@ export class MockWindowBackend implements WindowBackend {
     return frame;
   }
   async setFrame(id: WindowId, frame: Rect) { this.windows = this.windows.map((window) => window.id === id ? { ...window, frame } : window); }
-  async openGroupHost(_groupId: string) {}
+  async openGroupHost(groupId: string) { this.groupHosts.add(groupId); }
+  async closeGroupHost(groupId: string) { this.groupHosts.delete(groupId); }
   async setTrayPresets(_presets: Array<{ id: string; name: string }>) {}
 }

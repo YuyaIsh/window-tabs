@@ -4,10 +4,10 @@ import type { WindowInfo } from "./model";
 
 const window = (id: string): WindowInfo => ({ id, processId: 1, appId: "app", appName: "App", title: id, frame: { x: 0, y: 0, width: 100, height: 100 }, displayId: "primary", state: "normal" });
 describe("groups", () => {
-  it("retains a one-tab group and removes only on explicit final ungroup", () => {
+  it("retains a one-tab group when using the ordinary remove control", () => {
     const group = newGroup(window("one"));
     expect(group.tabs).toHaveLength(1);
-    expect(ungroupWindow(group, "one")).toBeNull();
+    expect(ungroupWindow(group, "one")).toEqual(group);
   });
   it("does not add the same runtime window twice", () => {
     const group = newGroup(window("one"));

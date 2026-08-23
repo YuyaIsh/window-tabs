@@ -131,3 +131,12 @@ PASS
 - `IMPLEMENTATION_PLAN.md`: Phase 0 and Phase 6 require Windows 10 evidence only.
 
 Result: **APPROVED**
+
+## Review round 5: distribution/updater draft alignment
+
+The draft updater PR (`docs/updater-plan`, PR #1) was reviewed before this
+correctness change. It changes the agreed Windows 10-only scope to Windows
+10/11 and rewrites D-022, so it must not be merged or rebased into this branch
+unchanged. Its standalone `DISTRIBUTION.md` strategy can be refreshed later in
+a dedicated Phase-6 distribution PR after retaining the current Windows 10
+scope and the existing manual-verification gates.

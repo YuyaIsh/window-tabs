@@ -67,6 +67,7 @@ struct WindowInfo {
 #[serde(rename_all = "camelCase")]
 struct DisplayInfo {
     id: String,
+    name: String,
     work_area: Rect,
     primary: bool,
 }
@@ -82,7 +83,7 @@ mod windows_backend {
     use windows::Win32::{
         Foundation::{CloseHandle, BOOL, HWND, LPARAM, POINT, RECT},
         Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
+            EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFOEXW,
             MONITOR_DEFAULTTONEAREST,
         },
         System::Threading::{
@@ -191,6 +192,23 @@ mod windows_backend {
             )
         }
     }
+    fn contains(rect: &RECT, point: POINT) -> bool {
+        point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+    }
+    fn is_manageable_top_level(window: HWND) -> bool {
+        unsafe {
+            if window.0.is_null()
+                || !IsWindowVisible(window).as_bool()
+                || !GetWindow(window, GW_OWNER).unwrap_or_default().0.is_null()
+                || (GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0
+                || title(window).is_empty()
+            {
+                return false;
+            }
+            let (process_id, app_id, ..) = process_details(window);
+            !is_own_process(process_id, &app_id)
+        }
+    }
     unsafe extern "system" fn each_display(
         monitor: HMONITOR,
         _hdc: HDC,
@@ -198,20 +216,21 @@ mod windows_backend {
         data: LPARAM,
     ) -> BOOL {
         let displays = &mut *(data.0 as *mut Vec<DisplayInfo>);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(monitor, (&mut info as *mut MONITORINFOEXW).cast()).as_bool() {
             displays.push(DisplayInfo {
                 id: format!("{:X}", monitor.0 as usize),
+                name: String::from_utf16_lossy(&info.szDevice)
+                    .trim_end_matches('\0')
+                    .to_owned(),
                 work_area: Rect {
-                    x: info.rcWork.left,
-                    y: info.rcWork.top,
-                    width: info.rcWork.right - info.rcWork.left,
-                    height: info.rcWork.bottom - info.rcWork.top,
+                    x: info.monitorInfo.rcWork.left,
+                    y: info.monitorInfo.rcWork.top,
+                    width: info.monitorInfo.rcWork.right - info.monitorInfo.rcWork.left,
+                    height: info.monitorInfo.rcWork.bottom - info.monitorInfo.rcWork.top,
                 },
-                primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
             });
         }
         BOOL(1)
@@ -259,7 +278,7 @@ mod windows_backend {
             EVENT_SYSTEM_FOREGROUND => ("focused", None, None),
             EVENT_OBJECT_DESTROY => ("destroyed", None, None),
             EVENT_SYSTEM_MINIMIZESTART => ("minimized", None, None),
-            EVENT_SYSTEM_MINIMIZEEND => ("restored", None, None),
+            EVENT_SYSTEM_MINIMIZEEND => ("restored", None, frame_for(window)),
             EVENT_SYSTEM_MOVESIZESTART if ctrl_down() => {
                 if let Some(drags) = NATIVE_DRAGS.get() {
                     let _ = drags
@@ -284,6 +303,7 @@ mod windows_backend {
                     ("frame-settled", None, frame_for(window))
                 }
             }
+            EVENT_OBJECT_LOCATIONCHANGE => ("frame-settled", None, frame_for(window)),
             _ => return,
         };
         if let Some(app) = EVENT_APP.get() {
@@ -305,21 +325,43 @@ mod windows_backend {
         unsafe {
             let mut point = POINT::default();
             GetCursorPos(&mut point).ok()?;
-            let target = GetAncestor(WindowFromPoint(point), GA_ROOT);
-            (!target.0.is_null() && target != source).then(|| format!("{:X}", target.0 as usize))
+            let mut probe = DropProbe {
+                source,
+                point,
+                target: None,
+            };
+            let _ = EnumWindows(
+                Some(find_drop_target),
+                LPARAM((&mut probe as *mut DropProbe) as isize),
+            );
+            probe
+                .target
+                .map(|target| format!("{:X}", target.0 as usize))
         }
     }
-    unsafe extern "system" fn each(window: HWND, data: LPARAM) -> BOOL {
-        if !IsWindowVisible(window).as_bool()
-            || !GetWindow(window, GW_OWNER).unwrap_or_default().0.is_null()
-            || (GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0
+    struct DropProbe {
+        source: HWND,
+        point: POINT,
+        target: Option<HWND>,
+    }
+    unsafe extern "system" fn find_drop_target(window: HWND, data: LPARAM) -> BOOL {
+        let probe = &mut *(data.0 as *mut DropProbe);
+        if window == probe.source || IsIconic(window).as_bool() || !is_manageable_top_level(window)
         {
             return BOOL(1);
         }
-        let value = title(window);
-        if value.is_empty() {
+        let mut rect = RECT::default();
+        if GetWindowRect(window, &mut rect).is_ok() && contains(&rect, probe.point) {
+            probe.target = Some(window);
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+    unsafe extern "system" fn each(window: HWND, data: LPARAM) -> BOOL {
+        if !is_manageable_top_level(window) {
             return BOOL(1);
         }
+        let value = title(window);
         let mut rect = RECT::default();
         if GetWindowRect(window, &mut rect).is_err() {
             return BOOL(1);
@@ -510,6 +552,7 @@ fn main() {
             windows_backend::get_window_frame,
             windows_backend::set_window_frame,
             open_group_host,
+            close_group_host,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -550,5 +593,14 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
     .skip_taskbar(true)
     .build()
     .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
+    let label = format!("group-{group_id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        window.close().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }

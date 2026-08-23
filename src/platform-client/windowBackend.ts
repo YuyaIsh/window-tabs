@@ -10,6 +10,7 @@ export interface WindowBackend {
   getFrame(id: WindowId): Promise<Rect>;
   setFrame(id: WindowId, frame: Rect): Promise<void>;
   openGroupHost(groupId: string): Promise<void>;
+  closeGroupHost(groupId: string): Promise<void>;
   setTrayPresets(presets: Array<{ id: string; name: string }>): Promise<void>;
 }
 
@@ -24,5 +25,6 @@ export const windowBackend: WindowBackend = {
   getFrame: (id) => invoke("get_window_frame", { id }),
   setFrame: (id, frame) => invoke("set_window_frame", { id, frame }),
   openGroupHost: (groupId) => invoke("open_group_host", { groupId }),
+  closeGroupHost: (groupId) => invoke("close_group_host", { groupId }),
   setTrayPresets: (presets) => invoke("set_tray_presets", { presets }),
 };
