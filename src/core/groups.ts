@@ -44,6 +44,9 @@ export function reorderTab(group: TabGroup, sourceTabId: string, destinationTabI
 }
 
 export function ungroupWindow(group: TabGroup, windowId: WindowId): TabGroup | null {
+  // The ordinary tab remove affordance must not implicitly destroy a one-tab
+  // group. Full dissolution is an explicit workspace command.
+  if (group.tabs.length <= 1 && group.tabs.some((tab) => tab.runtimeWindowId === windowId)) return group;
   const tabs = group.tabs.filter((tab) => tab.runtimeWindowId !== windowId);
   if (!tabs.length) return null;
   return { ...group, tabs, activeTabId: tabs.some((tab) => tab.id === group.activeTabId) ? group.activeTabId : tabs[0].id };

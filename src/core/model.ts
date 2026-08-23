@@ -2,7 +2,9 @@ export type WindowId = string;
 export type DisplayId = string;
 
 export type Rect = { x: number; y: number; width: number; height: number };
-export type DisplayInfo = { id: DisplayId; workArea: Rect; primary: boolean };
+export type DisplayInfo = { id: DisplayId; name?: string; workArea: Rect; primary: boolean };
+/** Persistent monitor identity. `id`/HMONITOR must never be written here. */
+export type DisplayHint = { name?: string; primary: boolean; workArea: Pick<Rect, "width" | "height"> };
 export type WindowState = "normal" | "minimized" | "maximized" | "unknown";
 
 export type WindowInfo = {
@@ -37,7 +39,7 @@ export type Preset = {
   id: string;
   name: string;
   tabs: PresetTab[];
-  displayId: DisplayId;
+  display: DisplayHint;
   frame: NormalizedFrame;
   updatedAt: string;
 };

@@ -28,10 +28,20 @@ review remains blocked. This record is not an approval substitute.
   input, and per-preset matcher editing.
 - The tray exposes saved presets directly; the diagnostic log is available
   from the group menu.
+- The initial `main` WebView is the sole controller for workspace mutations,
+  native events, polling, geometry writes, tray actions, and preset
+  reconnection. Secondary group hosts receive snapshots and send commands.
+- Presets store a persistent display hint instead of runtime HMONITOR-derived
+  IDs. Applying or reconnecting a preset excludes every runtime window already
+  owned by another group before evaluating match rules.
+- Native drop targeting now enumerates top-level windows in Z order, skips the
+  moving source, and applies the same manageable-window filter used by the
+  picker. This can find a valid window behind the source at the cursor point.
 
 ## Automated checks
 
-- `pnpm test` — PASS (10 tests)
+- `pnpm test` — PASS (18 tests after controller, duplicate ownership, display
+  persistence, and geometry coverage)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS
@@ -43,6 +53,29 @@ review remains blocked. This record is not an approval substitute.
 - Two displays with mixed DPI, disconnect/reconnect, maximize, restore, and
   standard Windows 10 Snap.
 - Restart/reconnect with 0, one, and ambiguous preset candidates.
+
+## Manual procedure additions
+
+1. Create two groups, then move, resize, focus, and Ctrl-drag a target in each
+   group. Confirm exactly one tab/group mutation occurs per native action.
+2. Save preset A using a window that is connected in group B. Apply A and
+   confirm that window remains owned by B and A stays unresolved.
+3. Apply a preset with an off-screen/missing monitor. Confirm the waiting host
+   and every connected target move to the resolved monitor position.
+4. Ctrl-drag a window over another window that remains behind the dragged
+   source. Confirm the behind-window target is found; also confirm tooltips,
+   menus, invisible windows, and the window-tabs host are never targets.
+5. Open and close picker, preset manager, and diagnostics from an existing
+   group. Confirm the host always returns to compact geometry and never leaves
+   an input-blocking transparent 640px window.
+6. Maximize, restore, and use normal Windows 10 Snap on the active tab. Confirm
+   other tabs and the host follow exactly once.
+
+## Current review result
+
+- Automated P0/P1/P2 findings: **0** for this change set.
+- GUI verification: **NOT RUN** for the scenarios above; this document is not
+  an approval claim.
 
 ## Review limitation
 

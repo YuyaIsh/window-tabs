@@ -1,4 +1,5 @@
-import type { TabEntry, TabGroup, WindowId } from "./model";
+import { reconnectGroupExcluding } from "./matching";
+import type { TabEntry, TabGroup, WindowId, WindowInfo } from "./model";
 
 export type Workspace = { groups: TabGroup[]; activeGroupId?: string };
 
@@ -20,11 +21,19 @@ export function updateActiveGroup(workspace: Workspace, update: (group: TabGroup
 }
 
 export function addGroup(workspace: Workspace, group: TabGroup): Workspace {
+  const occupied = new Set(workspace.groups.flatMap((item) => item.tabs.map((tab) => tab.runtimeWindowId).filter(Boolean)));
+  if (workspace.groups.some((item) => item.id === group.id) || group.tabs.some((tab) => tab.runtimeWindowId && occupied.has(tab.runtimeWindowId))) return workspace;
   return { groups: [...workspace.groups, group], activeGroupId: group.id };
 }
 
 export function selectGroup(workspace: Workspace, groupId: string): Workspace {
   return workspace.groups.some((group) => group.id === groupId) ? { ...workspace, activeGroupId: groupId } : workspace;
+}
+
+/** Explicitly dissolve a group; unlike tab removal this may remove the last tab. */
+export function dissolveGroup(workspace: Workspace, groupId: string): Workspace {
+  const groups = workspace.groups.filter((group) => group.id !== groupId);
+  return { groups, activeGroupId: groups.some((group) => group.id === workspace.activeGroupId) ? workspace.activeGroupId : groups[0]?.id };
 }
 
 export function groupForWindow(workspace: Workspace, windowId: WindowId): TabGroup | null {
@@ -54,4 +63,24 @@ export function detachTab(workspace: Workspace, sourceGroupId: string, tabId: st
   const sourceTabs = source.tabs.filter((item) => item.id !== tabId);
   const groups = workspace.groups.flatMap((group) => group.id !== source.id ? [group] : sourceTabs.length ? [{ ...source, tabs: sourceTabs, activeTabId: source.activeTabId === tabId ? sourceTabs[0].id : source.activeTabId }] : []).concat(detached);
   return { groups, activeGroupId: detached.id };
+}
+
+/** Reconnect preset groups in order while maintaining global WindowId ownership. */
+export function reconnectWorkspace(workspace: Workspace, windows: WindowInfo[]): Workspace {
+  const claimed = new Set<string>();
+  const groups = workspace.groups.flatMap((group) => {
+    if (group.presetId) {
+      const next = reconnectGroupExcluding(group, windows, claimed);
+      for (const tab of next.tabs) if (tab.runtimeWindowId) claimed.add(tab.runtimeWindowId);
+      return [next];
+    }
+    const tabs = group.tabs.filter((tab) => {
+      if (!tab.runtimeWindowId) return true;
+      if (claimed.has(tab.runtimeWindowId)) return false;
+      claimed.add(tab.runtimeWindowId);
+      return true;
+    });
+    return tabs.length ? [{ ...group, tabs, activeTabId: tabs.some((tab) => tab.id === group.activeTabId) ? group.activeTabId : tabs[0]?.id }] : [];
+  });
+  return { groups, activeGroupId: groups.some((group) => group.id === workspace.activeGroupId) ? workspace.activeGroupId : groups[0]?.id };
 }

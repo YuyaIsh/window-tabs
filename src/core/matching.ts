@@ -17,11 +17,16 @@ export function reconnectTab(tab: TabEntry, windows: WindowInfo[]): TabEntry {
 }
 
 export function reconnectGroup(group: TabGroup, windows: WindowInfo[]): TabGroup {
+  return reconnectGroupExcluding(group, windows, new Set());
+}
+
+/** Reconnect a group without ever claiming a runtime window owned by another group. */
+export function reconnectGroupExcluding(group: TabGroup, windows: WindowInfo[], occupied: ReadonlySet<string>): TabGroup {
   const byId = new Map(windows.map((window) => [window.id, window]));
-  const used = new Set<string>();
+  const used = new Set<string>(occupied);
   const tabs = group.tabs.map((tab) => {
     const existing = tab.runtimeWindowId ? byId.get(tab.runtimeWindowId) : undefined;
-    if (existing) { used.add(existing.id); return { ...tab, status: existing.state === "minimized" ? "minimized" as const : "connected" as const }; }
+    if (existing && !used.has(existing.id)) { used.add(existing.id); return { ...tab, status: existing.state === "minimized" ? "minimized" as const : "connected" as const }; }
     const result = matchWindow(tab.rule, windows.filter((window) => !used.has(window.id)));
     if (result.kind === "connected") { used.add(result.window.id); return { ...tab, runtimeWindowId: result.window.id, status: result.window.state === "minimized" ? "minimized" as const : "connected" as const }; }
     return { ...tab, runtimeWindowId: undefined, status: "unresolved" as const };
