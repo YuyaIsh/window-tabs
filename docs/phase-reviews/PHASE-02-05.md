@@ -53,6 +53,10 @@ review remains blocked. This record is not an approval substitute.
 - Two displays with mixed DPI, disconnect/reconnect, maximize, restore, and
   standard Windows 10 Snap.
 - Restart/reconnect with 0, one, and ambiguous preset candidates.
+- Two simultaneous group bars must remain bound to their stable group IDs while
+  focus changes; the controller is not a group host.
+- Cross-group tab moves, outside-bar tab release, later preset reconnect, and
+  manual preset assignment must place the real window at the destination frame.
 
 ## Manual procedure additions
 
