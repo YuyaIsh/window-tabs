@@ -75,6 +75,7 @@ function App() {
   const settledFrameTimers = useRef(new Map<string, number>());
   const missingWindowPolls = useRef(new Map<string, number>());
   const workspaceChannel = useRef<BroadcastChannel | null>(null);
+  const tabDragSessionRef = useRef<typeof tabDragSession>(null);
   const workspaceRef = useRef(workspace);
   const windowsRef = useRef(windows);
   const displaysRef = useRef(displays);
@@ -145,6 +146,7 @@ function App() {
     if (suppressWorkspaceBroadcast.current) { suppressWorkspaceBroadcast.current = false; return; }
     workspaceChannel.current?.postMessage({ type: "workspace-snapshot", workspace, windows: windowsRef.current, displays: displaysRef.current, presets });
   }, [workspace, windows, displays, presets]);
+  useEffect(() => { tabDragSessionRef.current = tabDragSession; }, [tabDragSession]);
   useEffect(() => {
     if (!isController) return;
     const lifecycle = reconcileGroupHosts(hostedGroupIds.current, workspace);
@@ -397,6 +399,15 @@ function App() {
     else sendCommand({ type: "ungroup", groupId: sourceGroupId, windowId: tab.runtimeWindowId });
     workspaceChannel.current?.postMessage({ type: "tab-drag-end" }); setDraggingTabId(null); setTabDragSession(null);
   };
+  useEffect(() => {
+    if (!hostGroupId) return;
+    const onDragEnd = () => window.setTimeout(() => {
+      const drag = tabDragSessionRef.current;
+      if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId);
+    }, 100);
+    window.addEventListener("dragend", onDragEnd, true);
+    return () => window.removeEventListener("dragend", onDragEnd, true);
+  }, [hostGroupId, workspace, displays]);
   const renameSelectedTab = (groupId = group?.id, tabId = group?.activeTabId) => {
     if (!groupId || !tabId) return;
     if (!isController) { sendCommand({ type: "rename-tab", groupId, tabId }); return; }
