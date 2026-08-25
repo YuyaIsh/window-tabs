@@ -19,11 +19,18 @@ describe("controller reducer", () => {
     expect(second.groups).toHaveLength(1);
     expect(second.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two", "one"]);
   });
-  it("has no workspace transition for a cancelled tab drag", () => {
+  it("releases a dropped-outside tab but leaves cancellation command-free", () => {
+    const first = newGroup(window("one"));
+    const second = { ...first, tabs: [...first.tabs, { ...newGroup(window("two")).tabs[0] }] };
+    const current = addGroup(emptyWorkspace(), second);
+    const released = applyWorkspaceCommand(current, { type: "release-tab", groupId: second.id, tabId: second.tabs[0].id });
+    expect(released.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two"]);
+    // Esc/cancellation sends no command, so the authoritative workspace stays unchanged.
+    expect(current.groups[0].tabs).toHaveLength(2);
+  });
+  it("dissolves a one-tab group when that tab is released outside every host", () => {
     const group = newGroup(window("one"));
     const current = addGroup(emptyWorkspace(), group);
-    // Cancellation intentionally emits no command; only the explicit release
-    // drop target may dissolve or ungroup a tab.
-    expect(current).toEqual(addGroup(emptyWorkspace(), group));
+    expect(applyWorkspaceCommand(current, { type: "release-tab", groupId: group.id, tabId: group.tabs[0].id }).groups).toHaveLength(0);
   });
 });

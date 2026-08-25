@@ -1,12 +1,13 @@
 import { addWindow, newGroup, reorderTab, selectTab, ungroupWindow } from "./groups";
 import type { WindowInfo } from "./model";
-import { addGroup, detachTab, groupForWindow, moveTabToGroup, type Workspace } from "./workspace";
+import { addGroup, detachTab, dissolveGroup, groupForWindow, moveTabToGroup, type Workspace } from "./workspace";
 
 export type WorkspaceCommand =
   | { type: "select-tab"; groupId: string; tabId: string }
   | { type: "reorder-tab"; groupId: string; sourceTabId: string; destinationTabId: string }
   | { type: "move-tab"; sourceGroupId: string; tabId: string; destinationGroupId: string }
   | { type: "detach-tab"; groupId: string; tabId: string }
+  | { type: "release-tab"; groupId: string; tabId: string }
   | { type: "ungroup"; groupId: string; windowId: string };
 
 /** The only reducer used by the authoritative host for secondary-host commands. */
@@ -16,6 +17,14 @@ export function applyWorkspaceCommand(workspace: Workspace, command: WorkspaceCo
     case "reorder-tab": return { ...workspace, groups: workspace.groups.map((group) => group.id === command.groupId ? reorderTab(group, command.sourceTabId, command.destinationTabId) : group) };
     case "move-tab": return moveTabToGroup(workspace, command.sourceGroupId, command.tabId, command.destinationGroupId);
     case "detach-tab": return detachTab(workspace, command.groupId, command.tabId);
+    case "release-tab": {
+      const group = workspace.groups.find((item) => item.id === command.groupId);
+      const tab = group?.tabs.find((item) => item.id === command.tabId);
+      if (!group || !tab?.runtimeWindowId) return workspace;
+      if (group.tabs.length === 1) return dissolveGroup(workspace, group.id);
+      const next = ungroupWindow(group, tab.runtimeWindowId);
+      return next ? { ...workspace, groups: workspace.groups.map((item) => item.id === group.id ? next : item) } : workspace;
+    }
     case "ungroup": return { ...workspace, groups: workspace.groups.flatMap((group) => group.id === command.groupId ? (() => { const next = ungroupWindow(group, command.windowId); return next ? [next] : []; })() : [group]) };
   }
 }

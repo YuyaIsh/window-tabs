@@ -27,7 +27,8 @@ review remains blocked. This record is not an approval substitute.
   manual assignment through the picker, user tab names, optional title-pattern
   input, and per-preset matcher editing.
 - The tray exposes saved presets directly; the diagnostic log is available
-  from the group menu.
+  from the group menu. Applying a tray preset does not surface or focus the
+  hidden controller WebView.
 - The initial `main` WebView is the sole controller for workspace mutations,
   native events, polling, geometry writes, tray actions, and preset
   reconnection. Secondary group hosts receive snapshots and send commands.
@@ -37,11 +38,18 @@ review remains blocked. This record is not an approval substitute.
 - Native drop targeting now enumerates top-level windows in Z order, skips the
   moving source, and applies the same manageable-window filter used by the
   picker. This can find a valid window behind the source at the cursor point.
+- Picker state carries an explicit target-group and unresolved-tab context, so
+  a secondary host's add button and a manual preset assignment both mutate the
+  intended group even though the controller itself is not a group host.
+- Focusing another group restores and activates its active real tab; it does
+  not focus a group-bar host. A tab dropped outside every group host is
+  released, while Esc cancels the drag without a workspace transition.
 
 ## Automated checks
 
-- `pnpm test` — PASS (26 tests after controller, duplicate ownership, display
-  persistence, host lifecycle, display fallback, and virtual-desktop geometry)
+- `pnpm test` — PASS (30 tests after controller, picker-context, duplicate
+  ownership, display persistence, host lifecycle, display fallback, and
+  virtual-desktop geometry coverage)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS
@@ -80,8 +88,13 @@ review remains blocked. This record is not an approval substitute.
    bars remain, each bound to its original group, regardless of active focus.
 9. Reconnect a preset candidate or manually assign an unresolved preset tab.
    Confirm the newly connected real window moves to that group's saved frame.
-10. Cancel a tab drag with Esc. Confirm ownership and group count are unchanged;
-    only the explicit release target may ungroup or dissolve a tab.
+10. Drop a tab outside every group bar. Confirm it is released from a
+    multi-tab group (or its one-tab group is dissolved), then repeat with Esc
+    and confirm ownership and group count are unchanged.
+11. From a secondary host, use `＋` and manually assign an unresolved preset
+    tab. Confirm the selected candidate is added or assigned to that exact
+    group, not to a newly created group. Apply a tray preset while the
+    controller is hidden and confirm no controller window is surfaced.
 
 ## Current review result
 
