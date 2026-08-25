@@ -433,6 +433,17 @@ function App() {
     else sendCommand({ type: "move-tab", groupId: drag.sourceGroupId, tabId: drag.tabId, destinationGroupId: group.id });
     endTabDrag();
   };
+  const dropTabOnGroup = () => {
+    const drag = tabDragSessionRef.current;
+    if (!drag || !group) return;
+    // Every part of a group host is an inside drop zone. A same-group drop on
+    // its empty area is intentionally a no-op; another host receives the tab.
+    if (drag.sourceGroupId !== group.id) {
+      if (isController) void moveTab(drag.sourceGroupId, drag.tabId, group.id);
+      else sendCommand({ type: "move-tab", groupId: drag.sourceGroupId, tabId: drag.tabId, destinationGroupId: group.id });
+    }
+    endTabDrag();
+  };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && tabDragSessionRef.current) tabDragCancelled.current = true;
@@ -552,11 +563,11 @@ function App() {
   };
 
   return <main>
-    <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" data-tauri-drag-region>
+    <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" data-tauri-drag-region onDragOver={(event) => event.preventDefault()} onDrop={dropTabOnGroup}>
       <div className="group-menu"><button className="group-name" onClick={() => setMenuOpen((value) => !value)}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
-      <div className="tabs">{group?.tabs.map((tab) => <div key={tab.id} className="tab-wrap" draggable onDragStart={() => group && beginTabDrag(group.id, tab.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => dropTabOn(tab.id)}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}{(draggingTabId || tabDragSession) && <button className="detach-drop" onDragOver={(event) => event.preventDefault()} onDrop={() => { const drag = tabDragSessionRef.current; if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId); }}>解除</button>}</div>
+      <div className="tabs">{group?.tabs.map((tab) => <div key={tab.id} className="tab-wrap" draggable onDragStart={() => group && beginTabDrag(group.id, tab.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropTabOn(tab.id); }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}{(draggingTabId || tabDragSession) && <button className="detach-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); const drag = tabDragSessionRef.current; if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId); }}>解除</button>}</div>
       <button className="add" aria-label="ウィンドウを追加" onClick={() => { if (!isController) sendCommand({ type: "open-picker", groupId: group?.id }); else { setPickerContext(closedPickerContext()); void refresh(); setPicker(true); } }}>＋</button>
     </section>
     <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : group ? `${workspace.groups.length} グループ中 ${workspace.groups.findIndex((item) => item.id === group.id) + 1}番目 · タブを選択して実ウィンドウを切り替えます。` : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>

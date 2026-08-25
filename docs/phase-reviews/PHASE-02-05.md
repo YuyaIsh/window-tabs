@@ -47,7 +47,7 @@ review remains blocked. This record is not an approval substitute.
 
 ## Automated checks
 
-- `pnpm test` — PASS (30 tests after controller, picker-context, duplicate
+- `pnpm test` — PASS (31 tests after controller, picker-context, duplicate
   ownership, display persistence, host lifecycle, display fallback, and
   virtual-desktop geometry coverage)
 - `pnpm run build` — PASS
@@ -95,6 +95,9 @@ review remains blocked. This record is not an approval substitute.
     tab. Confirm the selected candidate is added or assigned to that exact
     group, not to a newly created group. Apply a tray preset while the
     controller is hidden and confirm no controller window is surfaced.
+12. Drop a tab onto its own group-bar whitespace, group name, and `＋`; confirm
+    it remains in that group. Drop it onto whitespace in another group bar and
+    confirm it moves into that destination group rather than being released.
 
 ## Current review result
 
