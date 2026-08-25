@@ -40,7 +40,7 @@ review remains blocked. This record is not an approval substitute.
 
 ## Automated checks
 
-- `pnpm test` — PASS (25 tests after controller, duplicate ownership, display
+- `pnpm test` — PASS (26 tests after controller, duplicate ownership, display
   persistence, host lifecycle, display fallback, and virtual-desktop geometry)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
@@ -80,6 +80,8 @@ review remains blocked. This record is not an approval substitute.
    bars remain, each bound to its original group, regardless of active focus.
 9. Reconnect a preset candidate or manually assign an unresolved preset tab.
    Confirm the newly connected real window moves to that group's saved frame.
+10. Cancel a tab drag with Esc. Confirm ownership and group count are unchanged;
+    only the explicit release target may ungroup or dissolve a tab.
 
 ## Current review result
 

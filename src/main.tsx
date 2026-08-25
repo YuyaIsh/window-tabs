@@ -5,7 +5,7 @@ import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { newGroup, reorderTab, selectTab, ungroupWindow } from "./core/groups";
 import { calculateTabBarFrame, TAB_BAR_OFFSET } from "./core/geometry";
-import { applyNativeDrop } from "./core/controller";
+import { applyNativeDrop, applyWorkspaceCommand } from "./core/controller";
 import { reconnectGroupExcluding } from "./core/matching";
 import { diagnostics, recordDiagnostic } from "./core/diagnostics";
 import { reconcileGroupHosts } from "./core/hostLifecycle";
@@ -41,6 +41,7 @@ type ControllerCommand =
   | { type: "dissolve-group"; groupId: string };
 
 const pinBarTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
+  if (isController) return;
   const appWindow = getCurrentWindow();
   const bar = calculateTabBarFrame(frame, display);
   await appWindow.setSize(new PhysicalSize(bar.width, COMPACT_HEIGHT));
@@ -75,7 +76,6 @@ function App() {
   const settledFrameTimers = useRef(new Map<string, number>());
   const missingWindowPolls = useRef(new Map<string, number>());
   const workspaceChannel = useRef<BroadcastChannel | null>(null);
-  const tabDragSessionRef = useRef<typeof tabDragSession>(null);
   const workspaceRef = useRef(workspace);
   const windowsRef = useRef(windows);
   const displaysRef = useRef(displays);
@@ -146,7 +146,6 @@ function App() {
     if (suppressWorkspaceBroadcast.current) { suppressWorkspaceBroadcast.current = false; return; }
     workspaceChannel.current?.postMessage({ type: "workspace-snapshot", workspace, windows: windowsRef.current, displays: displaysRef.current, presets });
   }, [workspace, windows, displays, presets]);
-  useEffect(() => { tabDragSessionRef.current = tabDragSession; }, [tabDragSession]);
   useEffect(() => {
     if (!isController) return;
     const lifecycle = reconcileGroupHosts(hostedGroupIds.current, workspace);
@@ -154,6 +153,12 @@ function App() {
     for (const groupId of lifecycle.close) void windowBackend.closeGroupHost(groupId);
     hostedGroupIds.current = new Set(workspace.groups.map((item) => item.id));
   }, [workspace.groups]);
+  useEffect(() => {
+    if (!isController) return;
+    const controllerWindow = getCurrentWindow();
+    if (picker || presetManager || diagnosticsOpen) void controllerWindow.show().then(() => controllerWindow.setFocus());
+    else void controllerWindow.hide();
+  }, [picker, presetManager, diagnosticsOpen]);
   useEffect(() => {
     const overlayOpen = picker || presetManager || diagnosticsOpen;
     if (overlayOpen) { void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT)); return; }
@@ -304,7 +309,7 @@ function App() {
     const selectedGroup = workspaceRef.current.groups.find((item) => item.id === groupId);
     if (!selectedGroup) return;
     const next = selectTab(selectedGroup, tabId);
-    setWorkspace((current) => ({ ...current, groups: current.groups.map((item) => item.id === groupId ? next : item), activeGroupId: groupId }));
+    setWorkspace((current) => applyWorkspaceCommand(current, { type: "select-tab", groupId, tabId }));
     const target = next.tabs.find((tab) => tab.id === tabId);
     if (!target?.runtimeWindowId) { setAssigningTabId(tabId); void refresh(); setPicker(true); return; }
     try { if (target.status === "minimized") await windowBackend.restore(target.runtimeWindowId); await windowBackend.activate(target.runtimeWindowId); }
@@ -399,15 +404,6 @@ function App() {
     else sendCommand({ type: "ungroup", groupId: sourceGroupId, windowId: tab.runtimeWindowId });
     workspaceChannel.current?.postMessage({ type: "tab-drag-end" }); setDraggingTabId(null); setTabDragSession(null);
   };
-  useEffect(() => {
-    if (!hostGroupId) return;
-    const onDragEnd = () => window.setTimeout(() => {
-      const drag = tabDragSessionRef.current;
-      if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId);
-    }, 100);
-    window.addEventListener("dragend", onDragEnd, true);
-    return () => window.removeEventListener("dragend", onDragEnd, true);
-  }, [hostGroupId, workspace, displays]);
   const renameSelectedTab = (groupId = group?.id, tabId = group?.activeTabId) => {
     if (!groupId || !tabId) return;
     if (!isController) { sendCommand({ type: "rename-tab", groupId, tabId }); return; }
@@ -467,11 +463,11 @@ function App() {
       }
       case "select-tab": void select(command.tabId, command.groupId); break;
       case "focus-group": focusGroup(command.groupId); break;
-      case "reorder-tab": setWorkspace((state) => ({ ...state, groups: state.groups.map((item) => item.id === command.groupId ? reorderTab(item, command.sourceTabId, command.destinationTabId) : item) })); break;
+      case "reorder-tab": setWorkspace((state) => applyWorkspaceCommand(state, { type: "reorder-tab", groupId: command.groupId, sourceTabId: command.sourceTabId, destinationTabId: command.destinationTabId })); break;
       case "move-tab": void moveTab(command.groupId, command.tabId, command.destinationGroupId); break;
-      case "ungroup": setWorkspace((state) => ({ ...state, groups: state.groups.flatMap((item) => item.id === command.groupId ? (() => { const next = ungroupWindow(item, command.windowId); return next ? [next] : []; })() : [item]) })); break;
+      case "ungroup": setWorkspace((state) => applyWorkspaceCommand(state, { type: "ungroup", groupId: command.groupId, windowId: command.windowId })); break;
       case "detach-tab": {
-        const next = detachTab(current, command.groupId, command.tabId);
+        const next = applyWorkspaceCommand(current, { type: "detach-tab", groupId: command.groupId, tabId: command.tabId });
         const detached = next.groups.find((item) => !current.groups.some((before) => before.id === item.id));
         setWorkspace(next); if (detached) void windowBackend.openGroupHost(detached.id); break;
       }

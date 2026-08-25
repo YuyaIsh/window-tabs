@@ -19,4 +19,11 @@ describe("controller reducer", () => {
     expect(second.groups).toHaveLength(1);
     expect(second.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two", "one"]);
   });
+  it("has no workspace transition for a cancelled tab drag", () => {
+    const group = newGroup(window("one"));
+    const current = addGroup(emptyWorkspace(), group);
+    // Cancellation intentionally emits no command; only the explicit release
+    // drop target may dissolve or ungroup a tab.
+    expect(current).toEqual(addGroup(emptyWorkspace(), group));
+  });
 });
