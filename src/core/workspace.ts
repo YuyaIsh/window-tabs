@@ -1,5 +1,6 @@
 import { reconnectGroupExcluding } from "./matching";
 import type { TabEntry, TabGroup, WindowId, WindowInfo } from "./model";
+import { addWindow } from "./groups";
 
 export type Workspace = { groups: TabGroup[]; activeGroupId?: string };
 
@@ -24,6 +25,23 @@ export function addGroup(workspace: Workspace, group: TabGroup): Workspace {
   const occupied = new Set(workspace.groups.flatMap((item) => item.tabs.map((tab) => tab.runtimeWindowId).filter(Boolean)));
   if (workspace.groups.some((item) => item.id === group.id) || group.tabs.some((tab) => tab.runtimeWindowId && occupied.has(tab.runtimeWindowId))) return workspace;
   return { groups: [...workspace.groups, group], activeGroupId: group.id };
+}
+
+/** Authoritative transition for adding a real window to an existing group. */
+export function addWindowToGroup(workspace: Workspace, groupId: string, window: WindowInfo): Workspace {
+  if (groupForWindow(workspace, window.id)) return workspace;
+  const group = workspace.groups.find((item) => item.id === groupId);
+  if (!group) return workspace;
+  return { ...workspace, groups: workspace.groups.map((item) => item.id === groupId ? addWindow(item, window) : item), activeGroupId: groupId };
+}
+
+/** Connects an unresolved preset tab while preserving global WindowId ownership. */
+export function assignWindowToTab(workspace: Workspace, groupId: string, tabId: string, window: WindowInfo): Workspace {
+  if (groupForWindow(workspace, window.id)) return workspace;
+  const group = workspace.groups.find((item) => item.id === groupId);
+  const tab = group?.tabs.find((item) => item.id === tabId);
+  if (!group || !tab || tab.runtimeWindowId) return workspace;
+  return { ...workspace, groups: workspace.groups.map((item) => item.id === groupId ? { ...item, activeTabId: tabId, tabs: item.tabs.map((candidate) => candidate.id === tabId ? { ...candidate, runtimeWindowId: window.id, status: window.state === "minimized" ? "minimized" : "connected" } : candidate) } : item), activeGroupId: groupId };
 }
 
 export function selectGroup(workspace: Workspace, groupId: string): Workspace {

@@ -40,8 +40,8 @@ review remains blocked. This record is not an approval substitute.
 
 ## Automated checks
 
-- `pnpm test` — PASS (21 tests after controller, duplicate ownership, display
-  persistence, geometry coverage, settled-frame coalescing, and host closing)
+- `pnpm test` — PASS (25 tests after controller, duplicate ownership, display
+  persistence, host lifecycle, display fallback, and virtual-desktop geometry)
 - `pnpm run build` — PASS
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS
 - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS
@@ -72,6 +72,10 @@ review remains blocked. This record is not an approval substitute.
    other tabs and the host follow exactly once.
 7. Dissolve a secondary-host group, or move its final tab into another group.
    Confirm its native host window closes rather than remaining as an empty bar.
+8. Create two groups and focus a native window in each. Confirm exactly two
+   bars remain, each bound to its original group, regardless of active focus.
+9. Reconnect a preset candidate or manually assign an unresolved preset tab.
+   Confirm the newly connected real window moves to that group's saved frame.
 
 ## Current review result
 

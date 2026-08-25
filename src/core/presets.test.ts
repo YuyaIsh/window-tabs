@@ -37,4 +37,12 @@ describe("preset persistence model", () => {
     const preset: Preset = { schemaVersion: 1, id: "preset", name: "Work", tabs: [], display: { name: "DISPLAY2", primary: false, workArea: { width: 100, height: 100 } }, frame: { x: .1, y: .2, width: .5, height: .4 }, updatedAt: "2026-01-01T00:00:00Z" };
     expect(resolvePresetGeometry(preset, [{ id: "runtime-2", name: "DISPLAY2", primary: false, workArea: { x: 1000, y: 10, width: 200, height: 300 } }])).toEqual({ display: { id: "runtime-2", name: "DISPLAY2", primary: false, workArea: { x: 1000, y: 10, width: 200, height: 300 } }, frame: { x: 1020, y: 70, width: 100, height: 120 } });
   });
+  it("uses a geometry-matching secondary before an arbitrary secondary", () => {
+    const displays = [
+      { id: "left", name: "LEFT", primary: false, workArea: { x: -1600, y: 0, width: 1600, height: 900 } },
+      { id: "right", name: "RIGHT", primary: false, workArea: { x: 1920, y: 0, width: 2560, height: 1440 } },
+      { id: "primary", name: "PRIMARY", primary: true, workArea: { x: 0, y: 0, width: 1920, height: 1080 } },
+    ];
+    expect(resolveDisplay({ primary: false, workArea: { width: 2560, height: 1440 } }, displays)?.id).toBe("right");
+  });
 });

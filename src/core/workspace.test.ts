@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newGroup } from "./groups";
 import type { WindowInfo } from "./model";
-import { activeGroup, addGroup, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, selectGroup, updateActiveGroup } from "./workspace";
+import { activeGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, selectGroup, updateActiveGroup } from "./workspace";
 
 const window = (id: string): WindowInfo => ({ id, processId: 1, appId: "app.exe", appName: "App", title: id, frame: { x: 0, y: 0, width: 100, height: 100 }, displayId: "primary", state: "normal" });
 
@@ -39,6 +39,12 @@ describe("workspace", () => {
     const duplicate = newGroup(window("one"));
     const next = addGroup(addGroup(emptyWorkspace(), first), duplicate);
     expect(next.groups).toEqual([first]);
+  });
+  it("does not manually assign a window already owned by another group", () => {
+    const owned = newGroup(window("one"));
+    const waiting = { id: "waiting", presetId: "preset", name: "Waiting", tabs: [{ id: "tab", name: "Tab", status: "unresolved" as const }], displayId: "primary", frame: { x: 0, y: 0, width: 1, height: 1 } };
+    const next = assignWindowToTab(addGroup(addGroup(emptyWorkspace(), owned), waiting), waiting.id, "tab", window("one"));
+    expect(next.groups.find((group) => group.id === waiting.id)?.tabs[0].runtimeWindowId).toBeUndefined();
   });
   it("dissolves a one-tab group only through the explicit command", () => {
     const group = newGroup(window("one"));
