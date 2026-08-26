@@ -7,7 +7,10 @@ export function displayHint(display: DisplayInfo | undefined): DisplayHint {
 }
 
 export function resolveDisplay(hint: DisplayHint, displays: DisplayInfo[]): DisplayInfo | undefined {
+  const sameSize = (display: DisplayInfo) => display.workArea.width === hint.workArea.width && display.workArea.height === hint.workArea.height;
   return displays.find((display) => hint.name && display.name === hint.name)
+    ?? displays.find((display) => display.primary === hint.primary && sameSize(display))
+    ?? displays.find(sameSize)
     ?? displays.find((display) => display.primary === hint.primary)
     ?? displays.find((display) => display.primary)
     ?? displays[0];

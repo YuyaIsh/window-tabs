@@ -531,10 +531,6 @@ fn main() {
                     }
                     "quit" => app.exit(0),
                     id if id.starts_with("preset:") => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
                         let _ = app.emit("launcher:apply-preset", id.trim_start_matches("preset:"));
                     }
                     _ => {}

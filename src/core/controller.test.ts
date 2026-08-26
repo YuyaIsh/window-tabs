@@ -19,4 +19,26 @@ describe("controller reducer", () => {
     expect(second.groups).toHaveLength(1);
     expect(second.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two", "one"]);
   });
+  it("releases a dropped-outside tab but leaves cancellation command-free", () => {
+    const first = newGroup(window("one"));
+    const second = { ...first, tabs: [...first.tabs, { ...newGroup(window("two")).tabs[0] }] };
+    const current = addGroup(emptyWorkspace(), second);
+    const released = applyWorkspaceCommand(current, { type: "release-tab", groupId: second.id, tabId: second.tabs[0].id });
+    expect(released.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two"]);
+    // Esc/cancellation sends no command, so the authoritative workspace stays unchanged.
+    expect(current.groups[0].tabs).toHaveLength(2);
+  });
+  it("dissolves a one-tab group when that tab is released outside every host", () => {
+    const group = newGroup(window("one"));
+    const current = addGroup(emptyWorkspace(), group);
+    expect(applyWorkspaceCommand(current, { type: "release-tab", groupId: group.id, tabId: group.tabs[0].id }).groups).toHaveLength(0);
+  });
+  it("moves a tab to the destination group when dropped on its bar", () => {
+    const source = newGroup(window("one"));
+    const destination = newGroup(window("two"));
+    const current = addGroup(addGroup(emptyWorkspace(), source), destination);
+    const next = applyWorkspaceCommand(current, { type: "move-tab", sourceGroupId: source.id, tabId: source.tabs[0].id, destinationGroupId: destination.id });
+    expect(next.groups).toHaveLength(1);
+    expect(next.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two", "one"]);
+  });
 });
