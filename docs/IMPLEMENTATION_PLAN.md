@@ -398,11 +398,27 @@ runtime ID に依存せず、現在存在する window を安全に preset へ�
 - 0 / 1 / multiple candidate transition が test 済み
 - PC restart を含む実機確認 PASS
 
-## Phase 6: Windows v1 hardening
+## Phase 6: Distribution / Installer / Updater / Windows v1 hardening
 
 ### Goal
 
-Windows 10 で日常利用できる状態まで回帰と edge case を潰す。
+Windows 10で日常利用できる製品回帰に加え、public GitHub Releaseから通常installし、署名付きupdateをユーザー操作で適用できる状態にする。
+
+### Distribution implementation
+
+- production identifierを初回release前に固定
+- `pnpm tauri dev` / `pnpm tauri build` のVite integration
+- x86_64 NSIS `setup.exe`（current-user install / shortcut / uninstall）
+- GitHub Releasesをinstaller、updater artifact、signature、`latest.json`のsingle sourceにする
+- Tauri v2 Updaterをcontrollerだけに接続
+- 起動時1回とtray手動check、process内rate limit
+- version/notes表示、user-authorized download、install、relaunch
+- failure diagnosticsとGitHub Releases fallback
+- updater artifact signing必須、private keyはrelease workflow Secretsだけに注入
+- PR CIはrelease signing secretsを扱わずunsigned NSIS smoke
+- SemVer/config/tag整合checkとtracked private-key check
+- public化前のfull-history secret scan
+- 詳細とrelease手順は `docs/DISTRIBUTION.md`
 
 ### Harden
 
@@ -435,12 +451,26 @@ Windows 10 で日常利用できる状態まで回帰と edge case を潰す。
 
 Windows 10 で実施する。
 
+### Distribution verification
+
+- clean WindowsへNSIS install、installed tray app起動、uninstall
+- public Release assetと`latest.json`を未認証download
+- version NからN+1を検知し、署名検証後にuser操作でinstall/relaunch
+- update後もpreset/settings保持
+- metadata/network/signature/download/install failureでNが利用可能
+- release workflowがNSIS/updater/signature/`latest.json`を再現
+- private key/passwordがrepository history、artifact、release、logsにない
+
+これらは実際のpublic ReleaseとWindows実機で観測するまでPASSにしない。code reviewが完了していても未実施なら `BLOCKED: RELEASE VERIFICATION` とする。
+
 ### APPROVE
 
 - `SPEC.md` の Windows v1 complete conditions がすべて PASS
 - Windows 10 regression PASS
 - 日常利用を止める known defect が 0
 - Phase 0 で成立確認した Task View / tab bar host / D&D / Snap が製品コードでも PASS
+- `docs/DISTRIBUTION.md` のrelease acceptanceがすべて実測PASS
+- unresolved code-review P0/P1/P2が0
 
 この approve を **Windows v1 APPROVED** とする。
 

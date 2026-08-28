@@ -1,0 +1,81 @@
+# Distribution, installer, and updater
+
+## Status and scope
+
+Windows v1 is distributed as an x86_64 NSIS `setup.exe` from public GitHub Releases. The same release provides Tauri v2 updater metadata and signed updater artifacts. Microsoft Store and macOS distribution are later work.
+
+The repository remains private while the Phase 6 implementation PR is reviewed. Visibility may be changed only after the full-history security gate is clean. Public repository visibility does not grant an OSS license; no license is added without a separate owner decision.
+
+## Application identity and persistence
+
+The production identifier is `io.github.yuyaish.window-tabs`. It is fixed before the first public release because changing it can change installer identity and WebView/application-data locations. The earlier unreleased `local.window-tabs` identity is not migrated automatically.
+
+Presets are stored in WebView local storage under `window-tabs.presets.v1`, not in the installation directory. NSIS current-user upgrade and Tauri updater installs replace application files while retaining application data for the unchanged identifier. Runtime HWND/HMONITOR values are never persisted. This design assumption is automated; actual N→N+1 retention remains a mandatory Windows smoke test.
+
+## Windows installer
+
+`pnpm tauri build` runs the frontend build through `beforeBuildCommand` and produces only NSIS by default. The installer uses `currentUser` mode, does not require administrator privileges, creates normal Windows application shortcuts, supports uninstall, and installs the tray application. CI uses `src-tauri/tauri.ci.conf.json` to disable updater artifacts and smoke-test an unsigned NSIS bundle without release keys.
+
+The formal download is the x64 `setup.exe` attached to a GitHub Release. MSI is not a supported v1 entry point.
+
+## Updater architecture
+
+The controller WebView is the sole updater owner. Secondary group hosts never call the updater plugin. The controller:
+
+1. checks once 1.5 seconds after startup;
+2. accepts manual checks from the tray item `更新を確認…`;
+3. rate-limits endpoint requests to one per 60 seconds per process;
+4. shows the available version and notes;
+5. downloads only after `更新をダウンロード`;
+6. installs and relaunches only after `インストールして再起動`;
+7. records failures in diagnostics and offers the Releases page without blocking normal use.
+
+There is no constant polling, silent download, silent restart, private GitHub API, PAT, or embedded GitHub credential. The endpoint is:
+
+`https://github.com/YuyaIsh/window-tabs/releases/latest/download/latest.json`
+
+Network failure, missing/malformed `latest.json`, invalid signature, interrupted download, and install failure leave the currently installed app available. Same-version metadata returns no update through the plugin's SemVer comparison.
+
+## Updater signing
+
+Tauri updater signatures are mandatory and independent from Windows Authenticode. Before the first release, generate the long-lived Tauri signing key in a controlled key ceremony. Do not print or commit the private key or password.
+
+Configure:
+
+- GitHub repository variable `TAURI_UPDATER_PUBLIC_KEY` with the complete Tauri public-key content;
+- GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY`;
+- GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+
+The release workflow injects the public key into the build-only config without logging it and refuses to run while the checked-in placeholder remains unresolved. Store an encrypted private-key backup outside GitHub and test recovery before first release. GitHub Secrets must not be the only copy.
+
+**MANUAL SECRET BACKUP REQUIRED.** This repository and this implementation do not claim that a safe off-GitHub backup exists.
+
+## GitHub Actions
+
+`.github/workflows/ci.yml` runs on Windows for PRs and `main`: frozen pnpm install, frontend tests/build, release-config checks, tracked-private-key scan, Rust fmt/clippy/test, and unsigned NSIS smoke. It has read-only repository permissions and no signing secrets.
+
+`.github/workflows/release.yml` runs only for SemVer tags or an explicit existing-tag dispatch. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and `tauri-apps/tauri-action@v0.6.2`. It produces NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, then creates a draft GitHub Release. `updaterJsonPreferNsis` prevents MSI selection.
+
+## Release procedure
+
+1. Complete the Phase 6 PR review and confirm unresolved P0/P1/P2 = 0.
+2. Complete the full-history secret review, then explicitly change repository visibility to public.
+3. Generate the signing key, commit or configure its public key, create both signing Secrets, create the public-key Variable, and verify the independent encrypted backup.
+4. Bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the same SemVer.
+5. Run all local checks and merge the reviewed change.
+6. Create and push `v<version>`; inspect the draft Release assets and workflow logs for leakage.
+7. Publish the Release, then verify unauthenticated setup/latest.json downloads.
+8. Perform clean install/start/tray/uninstall smoke.
+9. For N+1, install N, save a preset/settings, publish N+1, check/download/install/relaunch, and verify retained data.
+10. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
+11. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
+
+## Acceptance gate
+
+Code/config review does not prove public distribution. Clean install, uninstall, public unauthenticated download, generated `latest.json`, N→N+1 detection and signature verification, user-authorized install/relaunch, persistence, failure safety, workflow reproducibility, and release/log secret review must all be observed. Until then Phase 6 is `BLOCKED: RELEASE VERIFICATION`.
+
+Unsigned installers may trigger Windows Defender SmartScreen warnings. Authenticode can improve publisher reputation but is separate from updater artifact signing and is not a Phase 6 blocker. The warning and manual trust decision must be included in the first-release notes.
+
+## macOS later
+
+macOS will reuse GitHub Releases, versioning, update ownership, and the signing pipeline. DMG, Apple code signing, notarization, Accessibility onboarding, and macOS updater smoke belong to later macOS phases.

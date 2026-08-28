@@ -18,6 +18,7 @@ struct TrayPreset {
 fn tray_menu(app: &tauri::AppHandle, presets: &[TrayPreset]) -> tauri::Result<Menu<tauri::Wry>> {
     let new_group = MenuItem::with_id(app, "new-group", "新しいグループ", true, None::<&str>)?;
     let manager = MenuItem::with_id(app, "presets", "プリセットを管理…", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(app, "check-updates", "更新を確認…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![&new_group, &manager];
     let preset_items = presets
@@ -37,6 +38,7 @@ fn tray_menu(app: &tauri::AppHandle, presets: &[TrayPreset]) -> tauri::Result<Me
             .iter()
             .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>),
     );
+    items.push(&check_updates);
     items.push(&quit);
     Menu::with_items(app, &items)
 }
@@ -509,6 +511,9 @@ mod windows_backend {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             windows_backend::start_window_events(app.handle().clone());
             let tray = TrayIconBuilder::with_id("launcher")
@@ -528,6 +533,13 @@ fn main() {
                             let _ = window.set_focus();
                         }
                         let _ = app.emit("launcher:open-presets", ());
+                    }
+                    "check-updates" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("launcher:check-updates", ());
                     }
                     "quit" => app.exit(0),
                     id if id.starts_with("preset:") => {

@@ -140,3 +140,9 @@ correctness change. It changes the agreed Windows 10-only scope to Windows
 unchanged. Its standalone `DISTRIBUTION.md` strategy can be refreshed later in
 a dedicated Phase-6 distribution PR after retaining the current Windows 10
 scope and the existing manual-verification gates.
+
+## Review round 6: Phase 6 distribution implementation alignment
+
+Phase 6 now includes the NSIS installer, controller-owned signed Tauri updater, GitHub Release workflow, version/security gates, persistence smoke, and public-release verification. Distribution decisions use D-024 through D-027; D-022 and D-023 retain their existing meanings. Draft PR #1 is design input only and must be superseded rather than merged. Public-release and N→N+1 checks remain blocking manual evidence, not inferred PASS.
+
+Result: **APPROVED (plan); Phase 6 verification remains blocked**

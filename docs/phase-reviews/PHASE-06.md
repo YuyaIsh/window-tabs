@@ -1,0 +1,91 @@
+# Phase 06 — Distribution / Installer / Updater / Release hardening
+
+Status: **BLOCKED: RELEASE VERIFICATION**
+
+## Implemented
+
+- Production identity `io.github.yuyaish.window-tabs` and documented pre-release identity break.
+- Standard Tauri/Vite before-dev and before-build commands.
+- Windows x86_64 current-user NSIS bundle as the only formal v1 installer.
+- Tauri v2 updater/process plugins, capabilities, updater artifacts, passive Windows install, and public GitHub `latest.json` endpoint.
+- Controller-only startup/manual checks with a 60-second process cooldown.
+- User-separated check, download, install/relaunch actions; no polling or silent update.
+- Update state/error UI, diagnostics, and Releases fallback.
+- PR CI without signing secrets and a release-only signing workflow using draft GitHub Releases.
+- SemVer/config/tag checks and tracked-private-key scan.
+- D-024 through D-027 and the distribution runbook.
+
+## Automated checks
+
+- `pnpm test` — PASS (11 files, 36 tests; updater cooldown/ownership/state/no-update/available/error/consent included).
+- `pnpm run build` — PASS (TypeScript and Vite production build).
+- `pnpm run check:release` — PASS (SemVer/config/identity/endpoint/NSIS/capability assumptions).
+- Release-key fail-closed check — PASS; absent public key/private key/password rejects release configuration.
+- `pnpm run check:secrets` — PASS (122 tracked/untracked non-ignored repository files).
+- `actionlint 1.7.12 .github/workflows/*.yml` — PASS; downloaded archive checksum verified.
+- `git diff --check` — PASS.
+- `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS.
+- `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` — PASS.
+- `cargo test --manifest-path src-tauri/Cargo.toml` — PASS (0 Rust unit tests; Windows test binary compiled and ran).
+
+## Security checks
+
+- Gitleaks 8.30.1 final full-history scan — PASS: 34 commits, approximately 955 KB, no leaks. The official Linux archive SHA-256 was verified before execution.
+- Full-history high-risk filename search (`.env`, key/certificate/keystore extensions, SSH key names) — no matches.
+- Full-history content search for PAT prefixes, private-key markers, assigned signing keys, and absolute `C:\Users`/`/home/<user>` paths — no matches.
+- Current repository private-key marker/extension scan — PASS.
+
+Updater private key/password were not generated, displayed, or committed. The checked-in public-key placeholder makes a release fail closed until the signing ceremony is complete.
+
+**MANUAL SECRET BACKUP REQUIRED.**
+
+## Distribution checks
+
+- Configuration/schema validation: PASS through Tauri build scripts, release-config check, Rust compile, and actionlint.
+- Unsigned local NSIS build: PASS using the CI config override; generated `window-tabs_0.1.0_x64-setup.exe` under the local Windows build target.
+- Normal signed `pnpm tauri build`: NOT RUN; production signing key/public key are intentionally unavailable. The unsigned CI-equivalent bundle does not prove updater signing.
+- Signed updater artifact / `.sig` / `latest.json`: NOT RUN (signing key intentionally unavailable).
+- GitHub Actions release reproduction: NOT RUN.
+
+## Release verification
+
+The following are **NOT RUN** and are not PASS:
+
+1. clean Windows NSIS install;
+2. installed app and tray startup;
+3. uninstall;
+4. unauthenticated public GitHub Release download;
+5. public `latest.json` retrieval;
+6. version N detecting N+1;
+7. updater signature verification;
+8. user Update action;
+9. N+1 startup;
+10. preset/settings retention;
+11. failure leaving N usable;
+12. release workflow artifact reproduction;
+13. repository/release/log secret exposure review.
+
+Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previously recorded, including physical Ctrl D&D, Task View/Alt+Tab, Snap/maximize/restore, multiple groups, mixed DPI/display disconnect, preset reconnect, and tab D&D.
+
+## Review findings
+
+- P1 — Updater/process capability was initially available to secondary group hosts. Fixed by splitting `main` and `group-hosts` capabilities; unit/config checks now enforce controller-only ownership.
+- P1 — The existing opener JS package lacked Rust plugin initialization, breaking the fallback capability. Fixed with `tauri-plugin-opener` and builder initialization.
+- P1 — Plugin JSON config required an explicit `serde_json` dependency for generated context compilation. Fixed and recompiled.
+- P2 — The private-key scanner initially matched its own minisign marker. Fixed by constructing the marker from fragments; repository scan now passes.
+
+Independent base-diff re-review found no remaining secret exposure, destructive updater/data-loss path, release/config mismatch, ownership regression, or false manual PASS.
+
+Unresolved P0/P1/P2: **0**.
+
+## Deferred
+
+- Windows Authenticode and SmartScreen reputation; unsigned-warning documentation is included.
+- Microsoft Store.
+- macOS packaging, Apple signing, and notarization.
+
+## Approval
+
+- Code review: **APPROVED** (unresolved P0/P1/P2 = 0).
+- Release acceptance: BLOCKED — real public release and N→N+1 smoke are not run.
+- Phase 6: **BLOCKED: RELEASE VERIFICATION**.

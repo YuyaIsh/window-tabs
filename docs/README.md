@@ -10,6 +10,7 @@ Windows を先に実装するが、macOS を後から追加できる構成を前
 - [ARCHITECTURE.md](./ARCHITECTURE.md): 共通層と OS 依存層の分離、Windows / macOS backend の境界
 - [DECISIONS.md](./DECISIONS.md): 現時点で確定した設計判断、採用しない方針、未確定事項
 - [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md): フェーズ分け、各フェーズのレビュー・動作確認・APPROVE 条件
+- [DISTRIBUTION.md](./DISTRIBUTION.md): Windows installer、署名付き updater、release 手順
 - [PLAN_REVIEW.md](./PLAN_REVIEW.md): 実装プラン自体のレビュー履歴と最終 APPROVE
 - `phase-reviews/`: 実装開始後に各フェーズの検証・レビュー・承認結果を保存する
 
@@ -21,7 +22,7 @@ Windows を先に実装するが、macOS を後から追加できる構成を前
 4. Phase 3: 実ウィンドウ D&D とタブ D&D を追加する
 5. Phase 4: 複数ディスプレイ、DPI、maximize / Snap を固める
 6. Phase 5: プリセット、matching、再起動後の再接続を作る
-7. Phase 6: Windows 10 の regression を通して Windows v1 を APPROVE する
+7. Phase 6: Distribution / installer / updater と Windows 10 regression を検証する
 8. Phase 7: macOS の技術 spike を行う
 9. Phase 8: macOS 版を Windows v1 と同じ共通仕様へ揃える
 10. Phase 9: 2 OS の共通 regression と schema 互換を確認する

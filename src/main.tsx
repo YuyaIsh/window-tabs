@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { newGroup, selectTab, ungroupWindow } from "./core/groups";
 import { calculateTabBarFrame, TAB_BAR_OFFSET } from "./core/geometry";
 import { applyNativeDrop, applyWorkspaceCommand } from "./core/controller";
@@ -11,6 +12,7 @@ import { diagnostics, recordDiagnostic } from "./core/diagnostics";
 import { reconcileGroupHosts } from "./core/hostLifecycle";
 import { assignmentPickerContext, closedPickerContext, groupPickerContext, newGroupPickerContext, type PickerContext } from "./core/pickerContext";
 import { groupToPreset, loadPresets, resolvePresetGeometry, savePresets, upsertPreset } from "./core/presets";
+import { ownsUpdater, UpdateController, type UpdateState } from "./core/updater";
 import { addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, selectGroup } from "./core/workspace";
 import type { DisplayInfo, Preset, TabGroup, WindowInfo } from "./core/model";
 import type { NativeWindowEvent } from "./platform-client/windowBackend";
@@ -19,9 +21,10 @@ import "./styles.css";
 
 const fromPreset = (preset: Preset, displayId: string): TabGroup => ({ id: crypto.randomUUID(), presetId: preset.id, name: preset.name, displayId, frame: preset.frame, tabs: preset.tabs.map((tab) => ({ ...tab, status: "unresolved" })) });
 const hostGroupId = new URLSearchParams(window.location.search).get("group") ?? undefined;
-const isController = !hostGroupId;
+const isController = ownsUpdater(hostGroupId);
 const COMPACT_HEIGHT = 120;
 const OVERLAY_HEIGHT = 640;
+const RELEASES_URL = "https://github.com/YuyaIsh/window-tabs/releases";
 type ControllerCommand =
   | { type: "open-picker"; groupId?: string; creatingGroup?: boolean }
   | { type: "open-preset-manager" }
@@ -68,6 +71,8 @@ function App() {
   // Secondary hosts may forward this request, but never render the controller overlay.
   const presetManager = isController && controllerPresetManager;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
   const [menuOpen, setMenuOpen] = useState(false);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const [tabDragSession, setTabDragSession] = useState<{ sourceGroupId: string; tabId: string } | null>(null);
@@ -87,6 +92,7 @@ function App() {
   const tabDragSessionRef = useRef<typeof tabDragSession>(null);
   const tabDragCancelled = useRef(false);
   const controllerCommandHandler = useRef<(command: ControllerCommand) => void>();
+  const updater = useRef(isController ? new UpdateController() : null);
   // The controller never renders a group bar. Every group is represented by
   // its own `?group=<id>` native host, independently of activeGroupId.
   const group = hostGroupId ? workspace.groups.find((item) => item.id === hostGroupId) ?? null : null;
@@ -96,6 +102,16 @@ function App() {
     catch (reason) { const message = reason instanceof Error ? reason.message : "ウィンドウの配置を更新できませんでした。"; pendingFrameMutations.current.delete(id); recordDiagnostic("error", message); setError(message); }
   };
   const sendCommand = (command: ControllerCommand) => workspaceChannel.current?.postMessage({ type: "controller-command", command });
+  const applyUpdateState = (state: UpdateState) => {
+    setUpdateState(state);
+    if (state.status === "available") setUpdateOpen(true);
+    if (state.status === "error" && state.error) recordDiagnostic("error", `Update: ${state.error}`);
+  };
+  const checkForUpdates = (manual: boolean) => {
+    if (!isController || !updater.current) return;
+    if (manual) setUpdateOpen(true);
+    void updater.current.check(applyUpdateState);
+  };
 
   const refresh = async () => {
     try {
@@ -136,6 +152,11 @@ function App() {
 
   useEffect(() => { if (isController) void refresh(); }, []);
   useEffect(() => {
+    if (!isController) return;
+    const timer = window.setTimeout(() => checkForUpdates(false), 1_500);
+    return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
     const channel = new BroadcastChannel("window-tabs-workspace");
     workspaceChannel.current = channel;
     channel.onmessage = ({ data }) => {
@@ -170,11 +191,11 @@ function App() {
   useEffect(() => {
     if (!isController) return;
     const controllerWindow = getCurrentWindow();
-    if (picker || presetManager || diagnosticsOpen) void controllerWindow.show().then(() => controllerWindow.setFocus());
+    if (picker || presetManager || diagnosticsOpen || updateOpen) void controllerWindow.show().then(() => controllerWindow.setFocus());
     else void controllerWindow.hide();
-  }, [picker, presetManager, diagnosticsOpen]);
+  }, [picker, presetManager, diagnosticsOpen, updateOpen]);
   useEffect(() => {
-    const overlayOpen = picker || presetManager || diagnosticsOpen;
+    const overlayOpen = picker || presetManager || diagnosticsOpen || updateOpen;
     if (overlayOpen) { void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT)); return; }
     if (group) {
       const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
@@ -184,7 +205,7 @@ function App() {
     const windowInfo = windows.find((item) => item.id === connected);
     if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
     void getCurrentWindow().setSize(new LogicalSize(720, COMPACT_HEIGHT));
-  }, [group, picker, presetManager, diagnosticsOpen, windows, displays]);
+  }, [group, picker, presetManager, diagnosticsOpen, updateOpen, windows, displays]);
   useEffect(() => {
     if (!hostGroupId || !group) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
@@ -230,6 +251,11 @@ function App() {
   useEffect(() => {
     if (!isController) return;
     const unsubscribe = listen("launcher:open-presets", () => { setMenuOpen(false); setPresetManager(true); });
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
+    if (!isController) return;
+    const unsubscribe = listen("launcher:check-updates", () => checkForUpdates(true));
     return () => { void unsubscribe.then((dispose) => dispose()); };
   }, []);
   useEffect(() => {
@@ -574,6 +600,16 @@ function App() {
     {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加"><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}
     {presetManager && <div className="overlay" role="dialog" aria-modal="true" aria-label="プリセットを管理"><section className="picker preset-manager"><header><div><p className="eyebrow">SAVED LAYOUTS</p><h1>プリセットを管理</h1></div><button aria-label="閉じる" onClick={() => setPresetManager(false)}>×</button></header><div className="preset-list">{presets.map((preset) => <article key={preset.id}><div><strong>{preset.name}</strong><small>{preset.tabs.length} タブ · 最終更新 {new Date(preset.updatedAt).toLocaleString()}</small></div><div><button className="secondary" onClick={() => void applyPreset(preset)}>適用</button><button className="secondary" onClick={() => editPresetMatcher(preset)}>条件…</button><button className="danger" onClick={() => deletePreset(preset.id)}>削除</button></div></article>)}{presets.length === 0 && <p className="empty">保存済みプリセットはありません。グループ名メニューから保存できます。</p>}</div></section></div>}
     {diagnosticsOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="診断ログ"><section className="picker preset-manager"><header><div><p className="eyebrow">DIAGNOSTICS</p><h1>診断ログ</h1></div><button aria-label="閉じる" onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="preset-list">{diagnostics().map((entry, index) => <article key={`${entry.at}-${index}`}><div><strong>{entry.level.toUpperCase()}</strong><small>{entry.at} · {entry.message}</small></div></article>)}{diagnostics().length === 0 && <p className="empty">このセッションではエラーは記録されていません。</p>}</div></section></div>}
+    {updateOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="更新"><section className="picker preset-manager"><header><div><p className="eyebrow">APPLICATION UPDATE</p><h1>window-tabs の更新</h1></div><button aria-label="閉じる" onClick={() => setUpdateOpen(false)}>×</button></header><div className="update-panel">
+      {updateState.status === "checking" && <p>更新を確認しています…</p>}
+      {updateState.status === "up-to-date" && <p>最新バージョンを使用しています。</p>}
+      {updateState.status === "available" && <><p><strong>{updateState.version}</strong> が利用できます。</p>{updateState.notes && <p className="update-notes">{updateState.notes}</p>}<button onClick={() => updater.current && void updater.current.download(applyUpdateState)}>更新をダウンロード</button></>}
+      {updateState.status === "downloading" && <p>署名付き更新をダウンロードしています…</p>}
+      {updateState.status === "ready" && <><p>{updateState.version} のダウンロードが完了しました。インストールすると window-tabs を再起動します。</p><button onClick={() => updater.current && void updater.current.installAndRelaunch(applyUpdateState)}>インストールして再起動</button></>}
+      {updateState.status === "installing" && <p>更新をインストールしています…</p>}
+      {updateState.status === "error" && <><p className="error">更新できませんでした。現在のバージョンはそのまま使用できます。</p><p className="update-notes">{updateState.error}</p><button className="secondary" onClick={() => void openUrl(RELEASES_URL)}>Releaseページを開く</button></>}
+      {updateState.status === "idle" && <button onClick={() => checkForUpdates(true)}>更新を確認</button>}
+    </div></section></div>}
   </main>;
 }
 
