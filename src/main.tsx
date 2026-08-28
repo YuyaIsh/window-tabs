@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -89,6 +89,8 @@ function App() {
   const hostedGroupIds = useRef(new Set<string>());
   const tabDragSessionRef = useRef<typeof tabDragSession>(null);
   const tabDragDestination = useRef<string | null>(null);
+  const tabPointerDrag = useRef<{ sourceGroupId: string; tabId: string; pointerId: number; startX: number; destinationTabId: string; moved: boolean } | null>(null);
+  const suppressTabClick = useRef<string | null>(null);
   const tabDragCancelled = useRef(false);
   const controllerCommandHandler = useRef<(command: ControllerCommand) => void>();
   const updater = useRef(isController ? new UpdateController() : null);
@@ -523,6 +525,35 @@ function App() {
     setDraggingTabId(tabId); setTabDragSession(drag);
     void emit("tab-drag-start", { groupId: sourceGroupId, tabId }).catch(() => undefined);
   };
+  const beginTabPointerDrag = (event: PointerEvent<HTMLElement>, sourceGroupId: string, tabId: string) => {
+    if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest(".remove"))) return;
+    tabPointerDrag.current = { sourceGroupId, tabId, pointerId: event.pointerId, startX: event.clientX, destinationTabId: tabId, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveTabPointerDrag = (event: PointerEvent<HTMLElement>) => {
+    const drag = tabPointerDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (Math.abs(event.clientX - drag.startX) >= 6) drag.moved = true;
+    if (!drag.moved) return;
+    const candidates = [...document.querySelectorAll<HTMLElement>("[data-tab-id]")];
+    const destination = candidates.reduce<HTMLElement | null>((closest, candidate) => {
+      const center = candidate.getBoundingClientRect().left + candidate.getBoundingClientRect().width / 2;
+      if (!closest) return candidate;
+      const closestCenter = closest.getBoundingClientRect().left + closest.getBoundingClientRect().width / 2;
+      return Math.abs(event.clientX - center) < Math.abs(event.clientX - closestCenter) ? candidate : closest;
+    }, null);
+    if (destination?.dataset.tabId) drag.destinationTabId = destination.dataset.tabId;
+  };
+  const finishTabPointerDrag = (event: PointerEvent<HTMLElement>) => {
+    const drag = tabPointerDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    tabPointerDrag.current = null;
+    if (!drag.moved) return;
+    suppressTabClick.current = drag.tabId;
+    if (drag.destinationTabId === drag.tabId) return;
+    if (isController) setWorkspace((state) => applyWorkspaceCommand(state, { type: "reorder-tab", groupId: drag.sourceGroupId, sourceTabId: drag.tabId, destinationTabId: drag.destinationTabId }));
+    else sendCommand({ type: "reorder-tab", groupId: drag.sourceGroupId, sourceTabId: drag.tabId, destinationTabId: drag.destinationTabId });
+  };
   const dropTabOn = (destinationTabId: string) => {
     const drag = tabDragSessionRef.current;
     if (!drag || !group) return;
@@ -685,7 +716,7 @@ function App() {
       <div className="group-menu"><button className="group-name" onClick={() => setMenuOpen((value) => !value)}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
-      <div className="tabs">{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" data-tab-id={tab.id} draggable onDragStart={(event) => group && beginTabDrag(event, group.id, tab.id)} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); tabDragDestination.current = tab.id; }} onDrop={(event) => { event.stopPropagation(); dropTabOn(tab.id); }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
+      <div className="tabs">{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" data-tab-id={tab.id} onPointerDown={(event) => group && beginTabPointerDrag(event, group.id, tab.id)} onPointerMove={moveTabPointerDrag} onPointerUp={finishTabPointerDrag} onPointerCancel={() => { tabPointerDrag.current = null; }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onClick={() => { if (suppressTabClick.current === tab.id) { suppressTabClick.current = null; return; } void select(tab.id); }} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
       <button className="add" aria-label={commandGroup ? `${commandGroup.name} にウィンドウを追加` : "ウィンドウを追加"} aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={openWindowPicker}>＋</button>
       {group && <div className="drag-handle" role="button" aria-label="グループ全体を移動" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
     </section>
