@@ -604,11 +604,12 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
     )
     .title("window-tabs")
     .inner_size(720.0, 48.0)
+    .position(-32_000.0, -32_000.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(false)
     .skip_taskbar(true)
-    .visible(false)
+    .visible(true)
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())
