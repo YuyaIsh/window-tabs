@@ -533,16 +533,14 @@ function App() {
   const moveTabPointerDrag = (event: PointerEvent<HTMLElement>) => {
     const drag = tabPointerDrag.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (Math.abs(event.clientX - drag.startX) >= 6) drag.moved = true;
+    const distance = event.clientX - drag.startX;
+    if (Math.abs(distance) >= 6) drag.moved = true;
     if (!drag.moved) return;
-    const candidates = [...document.querySelectorAll<HTMLElement>("[data-tab-id]")];
-    const destination = candidates.reduce<HTMLElement | null>((closest, candidate) => {
-      const center = candidate.getBoundingClientRect().left + candidate.getBoundingClientRect().width / 2;
-      if (!closest) return candidate;
-      const closestCenter = closest.getBoundingClientRect().left + closest.getBoundingClientRect().width / 2;
-      return Math.abs(event.clientX - center) < Math.abs(event.clientX - closestCenter) ? candidate : closest;
-    }, null);
-    if (destination?.dataset.tabId) drag.destinationTabId = destination.dataset.tabId;
+    const owner = workspaceRef.current.groups.find((candidate) => candidate.id === drag.sourceGroupId);
+    const sourceIndex = owner?.tabs.findIndex((tab) => tab.id === drag.tabId) ?? -1;
+    if (!owner || sourceIndex < 0) return;
+    const destinationIndex = Math.max(0, Math.min(owner.tabs.length - 1, sourceIndex + (distance > 0 ? 1 : -1)));
+    drag.destinationTabId = owner.tabs[destinationIndex].id;
   };
   const finishTabPointerDrag = (event: PointerEvent<HTMLElement>) => {
     const drag = tabPointerDrag.current;
