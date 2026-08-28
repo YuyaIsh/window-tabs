@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newGroup } from "./groups";
 import type { WindowInfo } from "./model";
-import { activeGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, removeClosedWindow, selectGroup, updateActiveGroup } from "./workspace";
+import { activeGroup, activeOrLatestGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, removeClosedWindow, selectGroup, updateActiveGroup } from "./workspace";
 
 const window = (id: string): WindowInfo => ({ id, processId: 1, appId: "app.exe", appName: "App", title: id, frame: { x: 0, y: 0, width: 100, height: 100 }, displayId: "primary", state: "normal" });
 
@@ -12,6 +12,12 @@ describe("workspace", () => {
     const workspace = selectGroup(addGroup(addGroup(emptyWorkspace(), one), two), one.id);
     expect(activeGroup(workspace)?.id).toBe(one.id);
     expect(workspace.groups).toHaveLength(2);
+  });
+  it("falls back to the latest group when the active id is temporarily missing", () => {
+    const one = newGroup(window("one"));
+    const two = newGroup(window("two"));
+    expect(activeOrLatestGroup({ groups: [one, two] })?.id).toBe(two.id);
+    expect(activeOrLatestGroup({ groups: [one, two], activeGroupId: one.id })?.id).toBe(one.id);
   });
   it("removes only the active group", () => {
     const one = newGroup(window("one"));

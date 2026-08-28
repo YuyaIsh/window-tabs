@@ -10,6 +10,10 @@ export function activeGroup(workspace: Workspace): TabGroup | null {
   return workspace.groups.find((group) => group.id === workspace.activeGroupId) ?? null;
 }
 
+export function activeOrLatestGroup(workspace: Workspace): TabGroup | null {
+  return activeGroup(workspace) ?? workspace.groups.at(-1) ?? null;
+}
+
 export function updateActiveGroup(workspace: Workspace, update: (group: TabGroup | null) => TabGroup | null): Workspace {
   const current = activeGroup(workspace);
   const next = update(current);

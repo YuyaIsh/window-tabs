@@ -13,7 +13,7 @@ import { reconcileGroupHosts } from "./core/hostLifecycle";
 import { assignmentPickerContext, closedPickerContext, groupPickerContext, newGroupPickerContext, type PickerContext } from "./core/pickerContext";
 import { groupToPreset, loadPresets, resolvePresetGeometry, savePresets, upsertPreset } from "./core/presets";
 import { ownsUpdater, UpdateController, type UpdateState } from "./core/updater";
-import { activeGroup, addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
+import { activeOrLatestGroup, addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
 import type { DisplayInfo, Preset, TabGroup, WindowInfo } from "./core/model";
 import type { NativeWindowEvent } from "./platform-client/windowBackend";
 import { windowBackend } from "./platform-client/windowBackend";
@@ -94,7 +94,7 @@ function App() {
   // The controller never renders a group bar. Every group is represented by
   // its own `?group=<id>` native host, independently of activeGroupId.
   const group = hostGroupId ? workspace.groups.find((item) => item.id === hostGroupId) ?? null : null;
-  const commandGroup = group ?? (isController ? activeGroup(workspace) : null);
+  const commandGroup = group ?? (isController ? activeOrLatestGroup(workspace) : null);
   const setFrame = async (id: string, frame: WindowInfo["frame"]) => {
     pendingFrameMutations.current.set(id, Date.now() + 1_000);
     try { await windowBackend.setFrame(id, frame); }
