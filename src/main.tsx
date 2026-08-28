@@ -13,7 +13,7 @@ import { reconcileGroupHosts } from "./core/hostLifecycle";
 import { assignmentPickerContext, closedPickerContext, groupPickerContext, newGroupPickerContext, type PickerContext } from "./core/pickerContext";
 import { groupToPreset, loadPresets, resolvePresetGeometry, savePresets, upsertPreset } from "./core/presets";
 import { ownsUpdater, UpdateController, type UpdateState } from "./core/updater";
-import { addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
+import { activeGroup, addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
 import type { DisplayInfo, Preset, TabGroup, WindowInfo } from "./core/model";
 import type { NativeWindowEvent } from "./platform-client/windowBackend";
 import { windowBackend } from "./platform-client/windowBackend";
@@ -94,6 +94,7 @@ function App() {
   // The controller never renders a group bar. Every group is represented by
   // its own `?group=<id>` native host, independently of activeGroupId.
   const group = hostGroupId ? workspace.groups.find((item) => item.id === hostGroupId) ?? null : null;
+  const commandGroup = group ?? (isController ? activeGroup(workspace) : null);
   const setFrame = async (id: string, frame: WindowInfo["frame"]) => {
     pendingFrameMutations.current.set(id, Date.now() + 1_000);
     try { await windowBackend.setFrame(id, frame); }
@@ -537,7 +538,7 @@ function App() {
       if (event.key === "F8" || (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "a")) {
         event.preventDefault();
         if (!isController) sendCommand({ type: "open-picker", groupId: group?.id });
-        else { setPickerContext(group ? groupPickerContext(group.id) : closedPickerContext()); void refresh(); setPicker(true); }
+        else { setPickerContext(commandGroup ? groupPickerContext(commandGroup.id) : closedPickerContext()); void refresh(); setPicker(true); }
       }
       if (event.ctrlKey && !event.altKey && !event.shiftKey && /^[1-9]$/.test(event.key) && group) {
         const tab = group.tabs[Number(event.key) - 1];
@@ -667,7 +668,7 @@ function App() {
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
       <div className="tabs">{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" draggable onDragStart={(event) => group && beginTabDrag(event, group.id, tab.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropTabOn(tab.id); }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}{(draggingTabId || tabDragSession) && <button className="detach-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); const drag = tabDragSessionRef.current; if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId); }}>解除</button>}</div>
-      <button className="add" aria-label="ウィンドウを追加" aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={() => { if (!isController) sendCommand({ type: "open-picker", groupId: group?.id }); else { setPickerContext(group ? groupPickerContext(group.id) : closedPickerContext()); void refresh(); setPicker(true); } }}>＋</button>
+      <button className="add" aria-label="ウィンドウを追加" aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={() => { if (!isController) sendCommand({ type: "open-picker", groupId: group?.id }); else { setPickerContext(commandGroup ? groupPickerContext(commandGroup.id) : closedPickerContext()); void refresh(); setPicker(true); } }}>＋</button>
       {group && <div className="drag-handle" role="button" aria-label="グループ全体を移動" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
     </section>
     {isController && <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>}
