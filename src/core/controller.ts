@@ -1,5 +1,5 @@
 import { addWindow, newGroup, reorderTab, selectTab, ungroupWindow } from "./groups";
-import type { WindowInfo } from "./model";
+import type { NormalizedFrame, WindowInfo } from "./model";
 import { addGroup, detachTab, dissolveGroup, groupForWindow, moveTabToGroup, type Workspace } from "./workspace";
 
 export type WorkspaceCommand =
@@ -30,10 +30,10 @@ export function applyWorkspaceCommand(workspace: Workspace, command: WorkspaceCo
 }
 
 /** Idempotent native-drop reducer: duplicate delivery cannot create duplicate groups. */
-export function applyNativeDrop(workspace: Workspace, source: WindowInfo, target: WindowInfo): Workspace {
+export function applyNativeDrop(workspace: Workspace, source: WindowInfo, target: WindowInfo, initialFrame?: NormalizedFrame): Workspace {
   const sourceOwner = groupForWindow(workspace, source.id);
   const targetOwner = groupForWindow(workspace, target.id);
-  if (!sourceOwner && !targetOwner) return addGroup(workspace, addWindow(newGroup(target), source));
+  if (!sourceOwner && !targetOwner) return addGroup(workspace, addWindow(newGroup(target, initialFrame), source));
   if (sourceOwner && !targetOwner) return { ...workspace, groups: workspace.groups.map((group) => group.id === sourceOwner.id ? addWindow(group, target) : group), activeGroupId: sourceOwner.id };
   if (!sourceOwner && targetOwner) return { ...workspace, groups: workspace.groups.map((group) => group.id === targetOwner.id ? addWindow(group, source) : group), activeGroupId: targetOwner.id };
   if (sourceOwner && targetOwner && sourceOwner.id !== targetOwner.id) {

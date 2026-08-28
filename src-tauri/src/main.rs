@@ -207,6 +207,13 @@ mod windows_backend {
             {
                 return false;
             }
+            let mut rect = RECT::default();
+            if GetWindowRect(window, &mut rect).is_err()
+                || rect.right - rect.left < 120
+                || rect.bottom - rect.top < 80
+            {
+                return false;
+            }
             let (process_id, app_id, ..) = process_details(window);
             !is_own_process(process_id, &app_id)
         }
@@ -459,8 +466,12 @@ mod windows_backend {
     #[tauri::command]
     pub fn set_window_frame(id: String, frame: Rect) -> Result<(), String> {
         unsafe {
+            let window = hwnd(&id)?;
+            if IsZoomed(window).as_bool() {
+                let _ = ShowWindow(window, SW_RESTORE);
+            }
             SetWindowPos(
-                hwnd(&id)?,
+                window,
                 HWND::default(),
                 frame.x,
                 frame.y,
@@ -560,6 +571,7 @@ fn main() {
             windows_backend::set_window_frame,
             open_group_host,
             close_group_host,
+            raise_group_host,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -582,9 +594,7 @@ fn set_tray_presets(
 #[tauri::command]
 async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
     let label = format!("group-{group_id}");
-    if let Some(window) = app.get_webview_window(&label) {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+    if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
     WebviewWindowBuilder::new(
@@ -593,11 +603,12 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
         WebviewUrl::App(format!("index.html?group={group_id}").into()),
     )
     .title("window-tabs")
-    .inner_size(720.0, 120.0)
+    .inner_size(720.0, 48.0)
     .resizable(false)
     .decorations(false)
-    .always_on_top(true)
+    .always_on_top(false)
     .skip_taskbar(true)
+    .visible(false)
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())
@@ -608,6 +619,39 @@ fn close_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
     let label = format!("group-{group_id}");
     if let Some(window) = app.get_webview_window(&label) {
         window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
+    let label = format!("group-{group_id}");
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| "group host is unavailable".to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            },
+        };
+        let raw = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(raw.0 as *mut c_void);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+            )
+            .map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }

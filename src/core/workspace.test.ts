@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newGroup } from "./groups";
 import type { WindowInfo } from "./model";
-import { activeGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, selectGroup, updateActiveGroup } from "./workspace";
+import { activeGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, removeClosedWindow, selectGroup, updateActiveGroup } from "./workspace";
 
 const window = (id: string): WindowInfo => ({ id, processId: 1, appId: "app.exe", appName: "App", title: id, frame: { x: 0, y: 0, width: 100, height: 100 }, displayId: "primary", state: "normal" });
 
@@ -49,5 +49,13 @@ describe("workspace", () => {
   it("dissolves a one-tab group only through the explicit command", () => {
     const group = newGroup(window("one"));
     expect(dissolveGroup(addGroup(emptyWorkspace(), group), group.id).groups).toHaveLength(0);
+  });
+  it("selects a surviving tab when the active runtime window closes", () => {
+    const first = newGroup(window("one"));
+    const secondTab = newGroup(window("two")).tabs[0];
+    const group = { ...first, tabs: [...first.tabs, secondTab] };
+    const next = removeClosedWindow(addGroup(emptyWorkspace(), group), "one");
+    expect(next.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two"]);
+    expect(next.groups[0].activeTabId).toBe(secondTab.id);
   });
 });

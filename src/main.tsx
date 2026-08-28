@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { newGroup, selectTab, ungroupWindow } from "./core/groups";
-import { calculateTabBarFrame, TAB_BAR_OFFSET } from "./core/geometry";
+import { calculateTabBarFrame, TAB_BAR_LOGICAL_HEIGHT } from "./core/geometry";
 import { applyNativeDrop, applyWorkspaceCommand } from "./core/controller";
 import { reconnectGroupExcluding } from "./core/matching";
 import { diagnostics, recordDiagnostic } from "./core/diagnostics";
@@ -13,7 +13,7 @@ import { reconcileGroupHosts } from "./core/hostLifecycle";
 import { assignmentPickerContext, closedPickerContext, groupPickerContext, newGroupPickerContext, type PickerContext } from "./core/pickerContext";
 import { groupToPreset, loadPresets, resolvePresetGeometry, savePresets, upsertPreset } from "./core/presets";
 import { ownsUpdater, UpdateController, type UpdateState } from "./core/updater";
-import { addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, selectGroup } from "./core/workspace";
+import { addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
 import type { DisplayInfo, Preset, TabGroup, WindowInfo } from "./core/model";
 import type { NativeWindowEvent } from "./platform-client/windowBackend";
 import { windowBackend } from "./platform-client/windowBackend";
@@ -24,7 +24,6 @@ const hostGroupId = new URLSearchParams(window.location.search).get("group") ?? 
 const isController = ownsUpdater(hostGroupId);
 // CSS layout uses logical pixels.  Native window frames are physical pixels, so
 // the host height is converted with the monitor scale factor before it is set.
-const COMPACT_LOGICAL_HEIGHT = 120;
 const OVERLAY_HEIGHT = 640;
 const RELEASES_URL = "https://github.com/YuyaIsh/window-tabs/releases";
 type ControllerCommand =
@@ -44,7 +43,7 @@ type ControllerCommand =
   | { type: "delete-preset"; presetId: string }
   | { type: "set-preset-matcher"; presetId: string; tabIndex: number; titlePattern: string }
   | { type: "apply-preset"; presetId: string }
-  | { type: "host-moved"; groupId: string; x: number; y: number }
+  | { type: "host-moved"; groupId: string; x: number; contentY: number }
   | { type: "dissolve-group"; groupId: string };
 
 const normalizeFrame = (frame: WindowInfo["frame"], display: DisplayInfo | undefined) => !display ? { x: 0.1, y: 0.1, width: 0.8, height: 0.8 } : { x: (frame.x - display.workArea.x) / display.workArea.width, y: (frame.y - display.workArea.y) / display.workArea.height, width: frame.width / display.workArea.width, height: frame.height / display.workArea.height };
@@ -80,6 +79,7 @@ function App() {
   // Moving a host to follow its real window also emits `onMoved`.  Keep the
   // expected positions briefly so that event is never mistaken for a user drag.
   const pinnedHostPositions = useRef(new Map<string, number>());
+  const hostPhysicalHeight = useRef(TAB_BAR_LOGICAL_HEIGHT);
   const workspaceRef = useRef(workspace);
   const windowsRef = useRef(windows);
   const displaysRef = useRef(displays);
@@ -102,13 +102,27 @@ function App() {
   const pinBarTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
     if (isController) return;
     const appWindow = getCurrentWindow();
-    const bar = calculateTabBarFrame(frame, display);
+    const initialScale = await appWindow.scaleFactor();
+    let physicalHeight = Math.round(TAB_BAR_LOGICAL_HEIGHT * initialScale);
+    let bar = calculateTabBarFrame(frame, physicalHeight, display);
     pinnedHostPositions.current.set(hostPositionKey(bar.x, bar.y), Date.now() + 1_000);
-    // Position first: after moving across monitors, scaleFactor() describes the
-    // destination monitor and keeps the CSS-height tab bar intact at any DPI.
     await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
-    const scaleFactor = await appWindow.scaleFactor();
-    await appWindow.setSize(new PhysicalSize(bar.width, Math.round(COMPACT_LOGICAL_HEIGHT * scaleFactor)));
+    const destinationScale = await appWindow.scaleFactor();
+    const destinationHeight = Math.round(TAB_BAR_LOGICAL_HEIGHT * destinationScale);
+    if (destinationHeight !== physicalHeight) {
+      physicalHeight = destinationHeight;
+      bar = calculateTabBarFrame(frame, physicalHeight, display);
+      pinnedHostPositions.current.set(hostPositionKey(bar.x, bar.y), Date.now() + 1_000);
+    }
+    hostPhysicalHeight.current = physicalHeight;
+    await appWindow.setSize(new PhysicalSize(bar.width, physicalHeight));
+    await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
+    await appWindow.show();
+    if (group) {
+      void windowBackend.raiseGroupHost(group.id).catch(() => undefined);
+      const contentY = bar.y + physicalHeight;
+      if (contentY > frame.y) sendCommand({ type: "host-moved", groupId: group.id, x: bar.x, contentY });
+    }
   };
   const sendCommand = (command: ControllerCommand) => { void emit("workspace-command", command).catch(() => undefined); };
   const applyUpdateState = (state: UpdateState) => {
@@ -156,6 +170,7 @@ function App() {
       try {
         if (targetTab?.status === "minimized") await windowBackend.restore(targetWindowId);
         await windowBackend.activate(targetWindowId);
+        await windowBackend.raiseGroupHost(groupId);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : "ウィンドウを前面化できませんでした。";
         recordDiagnostic("error", message); setError(message);
@@ -235,7 +250,7 @@ function App() {
     const connected = group?.tabs.map((tab) => tab.runtimeWindowId).find(Boolean);
     const windowInfo = windows.find((item) => item.id === connected);
     if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
-    void getCurrentWindow().setSize(new LogicalSize(720, COMPACT_LOGICAL_HEIGHT));
+    void getCurrentWindow().setSize(new LogicalSize(720, TAB_BAR_LOGICAL_HEIGHT));
   }, [group, picker, presetManager, diagnosticsOpen, updateOpen, windows, displays]);
   useEffect(() => {
     if (!hostGroupId || !group) return;
@@ -264,10 +279,10 @@ function App() {
         const until = pinnedHostPositions.current.get(key);
         if (until && until >= Date.now()) return;
         pinnedHostPositions.current.delete(key);
-        sendCommand({ type: "host-moved", groupId: group.id, x: payload.x, y: payload.y });
+        sendCommand({ type: "host-moved", groupId: group.id, x: payload.x, contentY: payload.y + hostPhysicalHeight.current });
         return;
       }
-      const frame = { x: payload.x, y: payload.y + TAB_BAR_OFFSET, width: Math.max(1, Math.round(group.frame.width * (displays.find((display) => display.id === group.displayId)?.workArea.width ?? 1))), height: Math.max(1, Math.round(group.frame.height * (displays.find((display) => display.id === group.displayId)?.workArea.height ?? 1))) };
+      const frame = { x: payload.x, y: payload.y + hostPhysicalHeight.current, width: Math.max(1, Math.round(group.frame.width * (displays.find((display) => display.id === group.displayId)?.workArea.width ?? 1))), height: Math.max(1, Math.round(group.frame.height * (displays.find((display) => display.id === group.displayId)?.workArea.height ?? 1))) };
       const display = displayForFrame(frame, displays);
       if (!display) return;
       const destination = denormalizeFrame({ ...normalizeFrame(frame, display), width: group.frame.width, height: group.frame.height }, display);
@@ -307,17 +322,18 @@ function App() {
   useEffect(() => {
     if (!isController) return;
     const unsubscribe = listen<NativeWindowEvent>("window-event", ({ payload }) => {
-      if (payload.kind === "focused") setWorkspace((current) => {
-        const owner = groupForWindow(current, payload.id);
-        const tabId = owner?.tabs.find((tab) => tab.runtimeWindowId === payload.id)?.id;
-        return owner && tabId ? { ...current, groups: current.groups.map((item) => item.id === owner.id ? selectTab(item, tabId) : item), activeGroupId: owner.id } : current;
-      });
+      if (payload.kind === "focused") {
+        const owner = groupForWindow(workspaceRef.current, payload.id);
+        if (owner) void windowBackend.raiseGroupHost(owner.id).catch(() => undefined);
+        setWorkspace((current) => {
+          const currentOwner = groupForWindow(current, payload.id);
+          const tabId = currentOwner?.tabs.find((tab) => tab.runtimeWindowId === payload.id)?.id;
+          return currentOwner && tabId ? { ...current, groups: current.groups.map((item) => item.id === currentOwner.id ? selectTab(item, tabId) : item), activeGroupId: currentOwner.id } : current;
+        });
+      }
       if (payload.kind === "drag-start") setNativeDragId(payload.id);
       if (payload.kind === "minimized" || payload.kind === "restored") setWorkspace((current) => ({ ...current, groups: current.groups.map((item) => ({ ...item, tabs: item.tabs.map((tab) => tab.runtimeWindowId === payload.id ? { ...tab, status: payload.kind === "minimized" ? "minimized" : "connected" } : tab) })) }));
-      if (payload.kind === "destroyed") setWorkspace((current) => {
-        const groups = current.groups.map((item) => item.presetId ? { ...item, tabs: item.tabs.map((tab) => tab.runtimeWindowId === payload.id ? { ...tab, runtimeWindowId: undefined, status: "unresolved" as const } : tab) } : { ...item, tabs: item.tabs.filter((tab) => tab.runtimeWindowId !== payload.id) }).filter((item) => item.tabs.length > 0);
-        return { groups, activeGroupId: groups.some((item) => item.id === current.activeGroupId) ? current.activeGroupId : groups[0]?.id };
-      });
+      if (payload.kind === "destroyed") setWorkspace((current) => removeClosedWindow(current, payload.id));
       if (payload.kind === "frame-settled" && payload.frame) {
         const previous = settledFrameTimers.current.get(payload.id);
         if (previous) window.clearTimeout(previous);
@@ -342,7 +358,8 @@ function App() {
       if (payload.kind === "drag-end" && payload.target) setWorkspace((current) => {
         const source = windows.find((window) => window.id === payload.id); const target = windows.find((window) => window.id === payload.target);
         if (!source || !target) return current;
-        const next = applyNativeDrop(current, source, target);
+        const targetDisplay = displays.find((item) => item.id === target.displayId);
+        const next = applyNativeDrop(current, source, target, normalizeFrame(target.frame, targetDisplay));
         const owner = groupForWindow(next, source.id) ?? groupForWindow(next, target.id);
         const display = (owner && displays.find((item) => item.id === owner.displayId)) ?? displays.find((item) => item.primary);
         const frame = owner && display ? denormalizeFrame(owner.frame, display) : source.frame;
@@ -376,7 +393,7 @@ function App() {
             missingWindowPolls.current.set(tab.runtimeWindowId, misses);
             return misses < 3 ? [tab] : [];
           });
-          return { ...item, tabs };
+          return { ...item, tabs, activeTabId: tabs.some((tab) => tab.id === item.activeTabId) ? item.activeTabId : tabs[0]?.id };
         }).filter((item) => item.tabs.length > 0);
         return { groups, activeGroupId: groups.some((item) => item.id === current.activeGroupId) ? current.activeGroupId : groups[0]?.id };
       });
@@ -394,7 +411,7 @@ function App() {
     setWorkspace((current) => applyWorkspaceCommand(current, { type: "select-tab", groupId, tabId }));
     const target = next.tabs.find((tab) => tab.id === tabId);
     if (!target?.runtimeWindowId) { setPickerContext(assignmentPickerContext(groupId, tabId)); void refresh(); setPicker(true); return; }
-    try { if (target.status === "minimized") await windowBackend.restore(target.runtimeWindowId); await windowBackend.activate(target.runtimeWindowId); }
+    try { if (target.status === "minimized") await windowBackend.restore(target.runtimeWindowId); await windowBackend.activate(target.runtimeWindowId); await windowBackend.raiseGroupHost(groupId); }
     catch (reason) { const message = reason instanceof Error ? reason.message : "ウィンドウを前面化できませんでした。"; recordDiagnostic("error", message); setError(message); }
   };
   const add = async (windowInfo: WindowInfo, targetGroupId?: string, targetAssigningTabId?: string, targetCreatingGroup = false) => {
@@ -413,7 +430,7 @@ function App() {
     }
     if (targetGroup && !targetCreatingGroup) {
       if (groupForWindow(workspaceRef.current, windowInfo.id)) return;
-      const anchorId = targetGroup.activeTabId ? targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId : targetGroup.tabs[0]?.runtimeWindowId;
+      const anchorId = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId ?? targetGroup.tabs.find((tab) => tab.runtimeWindowId)?.runtimeWindowId;
       const anchor = windows.find((item) => item.id === anchorId);
       if (anchor && anchor.id !== windowInfo.id) { await setFrame(windowInfo.id, anchor.frame); await pinBarTo(anchor.frame); }
       setWorkspace((current) => addWindowToGroup(current, targetGroup.id, windowInfo));
@@ -484,7 +501,9 @@ function App() {
     else sendCommand({ type: "release-tab", groupId: sourceGroupId, tabId });
     endTabDrag();
   };
-  const beginTabDrag = (sourceGroupId: string, tabId: string) => {
+  const beginTabDrag = (event: DragEvent<HTMLElement>, sourceGroupId: string, tabId: string) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", tabId);
     const drag = { sourceGroupId, tabId };
     tabDragCancelled.current = false; tabDragSessionRef.current = drag;
     setDraggingTabId(tabId); setTabDragSession(drag);
@@ -600,7 +619,7 @@ function App() {
         const target = current.groups.find((item) => item.id === command.groupId);
         if (!target) break;
         const oldDisplay = displays.find((item) => item.id === target.displayId);
-        const frame = { x: command.x, y: command.y + TAB_BAR_OFFSET, width: Math.max(1, Math.round(target.frame.width * (oldDisplay?.workArea.width ?? 1))), height: Math.max(1, Math.round(target.frame.height * (oldDisplay?.workArea.height ?? 1))) };
+        const frame = { x: command.x, y: command.contentY, width: Math.max(1, Math.round(target.frame.width * (oldDisplay?.workArea.width ?? 1))), height: Math.max(1, Math.round(target.frame.height * (oldDisplay?.workArea.height ?? 1))) };
         const display = displayForFrame(frame, displays);
         if (!display) break;
         const nextFrame = normalizeFrame(frame, display);
@@ -630,15 +649,16 @@ function App() {
     }
   };
 
-  return <main>
+  return <main className={isController ? "controller-shell" : "group-host"}>
     <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" onMouseDown={startHostDrag} onDragOver={(event) => event.preventDefault()} onDrop={dropTabOnGroup}>
       <div className="group-menu"><button className="group-name" onClick={() => setMenuOpen((value) => !value)}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
-      <div className="tabs">{group?.tabs.map((tab) => <div key={tab.id} className="tab-wrap" draggable onDragStart={() => group && beginTabDrag(group.id, tab.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropTabOn(tab.id); }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}{(draggingTabId || tabDragSession) && <button className="detach-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); const drag = tabDragSessionRef.current; if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId); }}>解除</button>}</div>
+      <div className="tabs">{group?.tabs.map((tab) => <div key={tab.id} className="tab-wrap" draggable onDragStart={(event) => group && beginTabDrag(event, group.id, tab.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); dropTabOn(tab.id); }}><button className={tab.id === group.activeTabId ? "tab active" : "tab"} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}{(draggingTabId || tabDragSession) && <button className="detach-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); const drag = tabDragSessionRef.current; if (drag) releaseDraggedTab(drag.sourceGroupId, drag.tabId); }}>解除</button>}</div>
+      {group && <div className="drag-handle" role="button" aria-label="グループ全体を移動" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
       <button className="add" aria-label="ウィンドウを追加" onClick={() => { if (!isController) sendCommand({ type: "open-picker", groupId: group?.id }); else { setPickerContext(closedPickerContext()); void refresh(); setPicker(true); } }}>＋</button>
     </section>
-    <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : group ? `${workspace.groups.length} グループ中 ${workspace.groups.findIndex((item) => item.id === group.id) + 1}番目 · タブを選択して実ウィンドウを切り替えます。` : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>
+    {isController && <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>}
     {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加"><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}
     {presetManager && <div className="overlay" role="dialog" aria-modal="true" aria-label="プリセットを管理"><section className="picker preset-manager"><header><div><p className="eyebrow">SAVED LAYOUTS</p><h1>プリセットを管理</h1></div><button aria-label="閉じる" onClick={() => setPresetManager(false)}>×</button></header><div className="preset-list">{presets.map((preset) => <article key={preset.id}><div><strong>{preset.name}</strong><small>{preset.tabs.length} タブ · 最終更新 {new Date(preset.updatedAt).toLocaleString()}</small></div><div><button className="secondary" onClick={() => void applyPreset(preset)}>適用</button><button className="secondary" onClick={() => editPresetMatcher(preset)}>条件…</button><button className="danger" onClick={() => deletePreset(preset.id)}>削除</button></div></article>)}{presets.length === 0 && <p className="empty">保存済みプリセットはありません。グループ名メニューから保存できます。</p>}</div></section></div>}
     {diagnosticsOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="診断ログ"><section className="picker preset-manager"><header><div><p className="eyebrow">DIAGNOSTICS</p><h1>診断ログ</h1></div><button aria-label="閉じる" onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="preset-list">{diagnostics().map((entry, index) => <article key={`${entry.at}-${index}`}><div><strong>{entry.level.toUpperCase()}</strong><small>{entry.at} · {entry.message}</small></div></article>)}{diagnostics().length === 0 && <p className="empty">このセッションではエラーは記録されていません。</p>}</div></section></div>}

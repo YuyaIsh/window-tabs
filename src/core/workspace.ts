@@ -58,6 +58,18 @@ export function groupForWindow(workspace: Workspace, windowId: WindowId): TabGro
   return workspace.groups.find((group) => group.tabs.some((tab) => tab.runtimeWindowId === windowId)) ?? null;
 }
 
+export function removeClosedWindow(workspace: Workspace, windowId: WindowId): Workspace {
+  const groups = workspace.groups.flatMap((group) => {
+    if (group.presetId) {
+      return [{ ...group, tabs: group.tabs.map((tab) => tab.runtimeWindowId === windowId ? { ...tab, runtimeWindowId: undefined, status: "unresolved" as const } : tab) }];
+    }
+    const tabs = group.tabs.filter((tab) => tab.runtimeWindowId !== windowId);
+    if (!tabs.length) return [];
+    return [{ ...group, tabs, activeTabId: tabs.some((tab) => tab.id === group.activeTabId) ? group.activeTabId : tabs[0].id }];
+  });
+  return { groups, activeGroupId: groups.some((group) => group.id === workspace.activeGroupId) ? workspace.activeGroupId : groups[0]?.id };
+}
+
 export function moveTabToGroup(workspace: Workspace, sourceGroupId: string, tabId: string, destinationGroupId: string): Workspace {
   if (sourceGroupId === destinationGroupId) return workspace;
   const source = workspace.groups.find((group) => group.id === sourceGroupId);

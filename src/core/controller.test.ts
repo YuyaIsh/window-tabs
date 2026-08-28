@@ -14,9 +14,11 @@ describe("controller reducer", () => {
     expect(next.groups).toHaveLength(1);
   });
   it("does not create duplicate groups when the same native drop is delivered twice", () => {
-    const first = applyNativeDrop(emptyWorkspace(), window("one"), window("two"));
+    const frame = { x: 0.2, y: 0.3, width: 0.5, height: 0.6 };
+    const first = applyNativeDrop(emptyWorkspace(), window("one"), window("two"), frame);
     const second = applyNativeDrop(first, window("one"), window("two"));
     expect(second.groups).toHaveLength(1);
+    expect(second.groups[0].frame).toEqual(frame);
     expect(second.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two", "one"]);
   });
   it("releases a dropped-outside tab but leaves cancellation command-free", () => {
