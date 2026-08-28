@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "group-hosts",
-  "description": "Secondary group hosts have no updater, process, or opener permissions.",
+  "description": "Secondary group hosts have no updater or opener permissions.",
   "windows": ["group-*"],
   "permissions": ["core:default"]
 }

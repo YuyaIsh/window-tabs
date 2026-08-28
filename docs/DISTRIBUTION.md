@@ -14,7 +14,7 @@ Presets are stored in WebView local storage under `window-tabs.presets.v1`, not 
 
 ## Windows installer
 
-`pnpm tauri build` runs the frontend build through `beforeBuildCommand` and produces only NSIS by default. The installer uses `currentUser` mode, does not require administrator privileges, creates normal Windows application shortcuts, supports uninstall, and installs the tray application. CI uses `src-tauri/tauri.ci.conf.json` to disable updater artifacts and smoke-test an unsigned NSIS bundle without release keys.
+`pnpm tauri build` runs the frontend build through `beforeBuildCommand`, produces only NSIS by default, and requires Tauri signing-key environment variables because production updater artifacts are enabled. Before the signing ceremony, use `pnpm run build:unsigned`; it builds the frontend and uses `src-tauri/tauri.ci.conf.json` to disable updater artifacts before producing an unsigned NSIS bundle. The installer uses `currentUser` mode, does not require administrator privileges, creates normal Windows application shortcuts, supports uninstall, and installs the tray application.
 
 The formal download is the x64 `setup.exe` attached to a GitHub Release. MSI is not a supported v1 entry point.
 
@@ -27,7 +27,7 @@ The controller WebView is the sole updater owner. Secondary group hosts never ca
 3. rate-limits endpoint requests to one per 60 seconds per process;
 4. shows the available version and notes;
 5. downloads only after `更新をダウンロード`;
-6. installs and relaunches only after `インストールして再起動`;
+6. installs only after `インストールして再起動`; on Windows the updater launches the installer and exits this process, and the installer performs the subsequent restart;
 7. records failures in diagnostics and offers the Releases page without blocking normal use.
 
 There is no constant polling, silent download, silent restart, private GitHub API, PAT, or embedded GitHub credential. The endpoint is:
@@ -54,7 +54,7 @@ The release workflow injects the public key into the build-only config without l
 
 `.github/workflows/ci.yml` runs on Windows for PRs and `main`: frozen pnpm install, frontend tests/build, release-config checks, tracked-private-key scan, Rust fmt/clippy/test, and unsigned NSIS smoke. It has read-only repository permissions and no signing secrets.
 
-`.github/workflows/release.yml` runs only for SemVer tags or an explicit existing-tag dispatch. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and `tauri-apps/tauri-action@v0.6.2`. It produces NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, then creates a draft GitHub Release. `updaterJsonPreferNsis` prevents MSI selection.
+`.github/workflows/release.yml` runs only for SemVer tags or an explicit existing-tag dispatch. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. It produces NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, then creates a draft GitHub Release. `updaterJsonPreferNsis` prevents MSI selection.
 
 ## Release procedure
 
@@ -66,13 +66,13 @@ The release workflow injects the public key into the build-only config without l
 6. Create and push `v<version>`; inspect the draft Release assets and workflow logs for leakage.
 7. Publish the Release, then verify unauthenticated setup/latest.json downloads.
 8. Perform clean install/start/tray/uninstall smoke.
-9. For N+1, install N, save a preset/settings, publish N+1, check/download/install/relaunch, and verify retained data.
+9. For N+1, install N, save a preset/settings, publish N+1, check/download/install, allow the Windows updater installer to restart, and verify retained data.
 10. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
 11. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
 
 ## Acceptance gate
 
-Code/config review does not prove public distribution. Clean install, uninstall, public unauthenticated download, generated `latest.json`, N→N+1 detection and signature verification, user-authorized install/relaunch, persistence, failure safety, workflow reproducibility, and release/log secret review must all be observed. Until then Phase 6 is `BLOCKED: RELEASE VERIFICATION`.
+Code/config review does not prove public distribution. Clean install, uninstall, public unauthenticated download, generated `latest.json`, N→N+1 detection and signature verification, user-authorized install followed by updater-installer restart, persistence, failure safety, workflow reproducibility, and release/log secret review must all be observed. Until then Phase 6 is `BLOCKED: RELEASE VERIFICATION`.
 
 Unsigned installers may trigger Windows Defender SmartScreen warnings. Authenticode can improve publisher reputation but is separate from updater artifact signing and is not a Phase 6 blocker. The warning and manual trust decision must be included in the first-release notes.
 

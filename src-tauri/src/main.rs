@@ -512,7 +512,6 @@ mod windows_backend {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             windows_backend::start_window_events(app.handle().clone());

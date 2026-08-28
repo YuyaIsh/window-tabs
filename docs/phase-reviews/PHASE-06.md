@@ -1,15 +1,15 @@
 # Phase 06 — Distribution / Installer / Updater / Release hardening
 
-Status: **BLOCKED: RELEASE VERIFICATION**
+Status: **IN_REVIEW; release acceptance remains BLOCKED: RELEASE VERIFICATION**
 
 ## Implemented
 
 - Production identity `io.github.yuyaish.window-tabs` and documented pre-release identity break.
 - Standard Tauri/Vite before-dev and before-build commands.
 - Windows x86_64 current-user NSIS bundle as the only formal v1 installer.
-- Tauri v2 updater/process plugins, capabilities, updater artifacts, passive Windows install, and public GitHub `latest.json` endpoint.
+- Tauri v2 updater plugin, controller-only capabilities, updater artifacts, passive Windows install, and public GitHub `latest.json` endpoint.
 - Controller-only startup/manual checks with a 60-second process cooldown.
-- User-separated check, download, install/relaunch actions; no polling or silent update.
+- User-separated check, download, install actions; on Windows the updater installer owns process exit/restart, with no polling or silent update.
 - Update state/error UI, diagnostics, and Releases fallback.
 - PR CI without signing secrets and a release-only signing workflow using draft GitHub Releases.
 - SemVer/config/tag checks and tracked-private-key scan.
@@ -74,10 +74,14 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 - P1 — Plugin JSON config required an explicit `serde_json` dependency for generated context compilation. Fixed and recompiled.
 - P2 — The private-key scanner initially matched its own minisign marker. Fixed by constructing the marker from fragments; repository scan now passes.
 - P2 — First GitHub CI run rejected duplicate pnpm version declarations in `package.json` and `pnpm/action-setup`. Fixed by letting the action read the pinned `packageManager`; local actionlint passed before rerun.
+- P2 — Release workflow used an outdated `tauri-action`. Fixed by pinning the immutable commit for the current `action-v1.0.0` release and validating the v1 inputs with actionlint.
+- P2 — The release-key preflight accepted an empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, as GitHub Actions maps a missing secret to an empty string. Fixed by rejecting missing and whitespace-only private keys/passwords.
+- P2 — Frontend updater code called the process-plugin relaunch after `install()`, although Windows updater installation exits the app itself. Fixed by removing the process plugin and delegating exit/restart to the Windows updater installer; the unit test now asserts only explicit download/install calls.
+- P2 — Docs implied that an unsigned installer could be built with normal `pnpm tauri build`. Fixed with the explicit `pnpm run build:unsigned` CI-equivalent script and documentation that normal builds require signing-key environment variables.
 
-Independent base-diff re-review found no remaining secret exposure, destructive updater/data-loss path, release/config mismatch, ownership regression, or false manual PASS.
+The fixes require reviewer re-review before code approval is restored.
 
-Unresolved P0/P1/P2: **0**.
+Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
 
 ## Deferred
 
@@ -87,6 +91,6 @@ Unresolved P0/P1/P2: **0**.
 
 ## Approval
 
-- Code review: **APPROVED** (unresolved P0/P1/P2 = 0).
+- Code review: **IN_REVIEW** (the four P2 fixes are awaiting reviewer confirmation).
 - Release acceptance: BLOCKED — real public release and N→N+1 smoke are not run.
 - Phase 6: **BLOCKED: RELEASE VERIFICATION**.

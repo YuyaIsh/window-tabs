@@ -10,7 +10,7 @@ pnpm test
 pnpm tauri dev
 ```
 
-`pnpm tauri dev` と `pnpm tauri build` はTauri設定からViteを自動起動・buildします。Windows x86_64の正式bundleはNSIS `setup.exe`です。
+`pnpm tauri dev` はTauri設定からViteを自動起動します。署名済みの正式release bundleは `pnpm tauri build` を使い、Tauri signing key 環境変数が必要です。署名ceremony前のWindows実機用unsigned NSIS bundleは `pnpm run build:unsigned` を使います。Windows x86_64の正式bundleはNSIS `setup.exe`です。
 
 ## Distribution status
 

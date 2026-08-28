@@ -241,7 +241,7 @@ public化はbranch変更ではなくrepository-wide operationなので、impleme
 
 **Status:** Accepted
 
-Windows v1の正式な初回導線をx86_64 NSIS `setup.exe`、更新導線を署名必須のTauri v2 Updaterとする。起動時に1回確認し、手動確認も提供する。download、install、relaunchはユーザーの明示操作後だけ行う。Microsoft StoreとWindows Authenticode証明書購入はv1の必須条件にしない。
+Windows v1の正式な初回導線をx86_64 NSIS `setup.exe`、更新導線を署名必須のTauri v2 Updaterとする。起動時に1回確認し、手動確認も提供する。downloadとinstallはユーザーの明示操作後だけ行う。Windowsではupdaterがinstallerを起動するとアプリプロセスを終了し、installerが更新後の再起動を扱うため、frontendからのprocess-plugin再起動は使わない。Microsoft StoreとWindows Authenticode証明書購入はv1の必須条件にしない。
 
 ## D-026: GitHub Releases を単一の配布・更新sourceにする
 

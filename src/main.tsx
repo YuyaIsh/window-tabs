@@ -605,7 +605,7 @@ function App() {
       {updateState.status === "up-to-date" && <p>最新バージョンを使用しています。</p>}
       {updateState.status === "available" && <><p><strong>{updateState.version}</strong> が利用できます。</p>{updateState.notes && <p className="update-notes">{updateState.notes}</p>}<button onClick={() => updater.current && void updater.current.download(applyUpdateState)}>更新をダウンロード</button></>}
       {updateState.status === "downloading" && <p>署名付き更新をダウンロードしています…</p>}
-      {updateState.status === "ready" && <><p>{updateState.version} のダウンロードが完了しました。インストールすると window-tabs を再起動します。</p><button onClick={() => updater.current && void updater.current.installAndRelaunch(applyUpdateState)}>インストールして再起動</button></>}
+      {updateState.status === "ready" && <><p>{updateState.version} のダウンロードが完了しました。インストールすると Windows updater が window-tabs を終了し、更新後に再起動します。</p><button onClick={() => updater.current && void updater.current.install(applyUpdateState)}>インストールして再起動</button></>}
       {updateState.status === "installing" && <p>更新をインストールしています…</p>}
       {updateState.status === "error" && <><p className="error">更新できませんでした。現在のバージョンはそのまま使用できます。</p><p className="update-notes">{updateState.error}</p><button className="secondary" onClick={() => void openUrl(RELEASES_URL)}>Releaseページを開く</button></>}
       {updateState.status === "idle" && <button onClick={() => checkForUpdates(true)}>更新を確認</button>}

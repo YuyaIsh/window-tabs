@@ -8,13 +8,13 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "tauri": "tauri",
+    "build:unsigned": "pnpm run build && pnpm tauri build --config src-tauri/tauri.ci.conf.json --target x86_64-pc-windows-msvc --bundles nsis",
     "check:release": "node scripts/check-release-config.mjs",
     "check:secrets": "node scripts/check-no-private-keys.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2.0.0",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

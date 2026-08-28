@@ -1,5 +1,4 @@
 import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 
 export const UPDATE_CHECK_COOLDOWN_MS = 60_000;
 
@@ -32,7 +31,6 @@ export type UpdateHandle = {
 
 export type UpdateRuntime = {
   check(): Promise<UpdateHandle | null>;
-  relaunch(): Promise<void>;
 };
 
 const runtime: UpdateRuntime = {
@@ -47,7 +45,6 @@ const runtime: UpdateRuntime = {
       install: () => update.install(),
     };
   },
-  relaunch,
 };
 
 export function canCheckForUpdate(lastCheckedAt: number | undefined, now: number): boolean {
@@ -97,12 +94,11 @@ export class UpdateController {
     return this.state;
   }
 
-  async installAndRelaunch(onChange: (state: UpdateState) => void): Promise<UpdateState> {
+  async install(onChange: (state: UpdateState) => void): Promise<UpdateState> {
     if (!this.update || this.state.status !== "ready") return this.state;
     this.setState({ ...this.state, status: "installing", error: undefined }, onChange);
     try {
       await this.update.install();
-      await this.adapter.relaunch();
     } catch (reason) {
       this.fail(reason, onChange);
     }

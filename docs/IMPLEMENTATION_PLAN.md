@@ -412,7 +412,7 @@ Windows 10で日常利用できる製品回帰に加え、public GitHub Release�
 - GitHub Releasesをinstaller、updater artifact、signature、`latest.json`のsingle sourceにする
 - Tauri v2 Updaterをcontrollerだけに接続
 - 起動時1回とtray手動check、process内rate limit
-- version/notes表示、user-authorized download、install、relaunch
+- version/notes表示、user-authorized download、install（Windowsの再起動はupdater installerへ委譲）
 - failure diagnosticsとGitHub Releases fallback
 - updater artifact signing必須、private keyはrelease workflow Secretsだけに注入
 - PR CIはrelease signing secretsを扱わずunsigned NSIS smoke
@@ -455,7 +455,7 @@ Windows 10 で実施する。
 
 - clean WindowsへNSIS install、installed tray app起動、uninstall
 - public Release assetと`latest.json`を未認証download
-- version NからN+1を検知し、署名検証後にuser操作でinstall/relaunch
+- version NからN+1を検知し、署名検証後にuser操作でinstall（Windowsの再起動はupdater installerへ委譲）
 - update後もpreset/settings保持
 - metadata/network/signature/download/install failureでNが利用可能
 - release workflowがNSIS/updater/signature/`latest.json`を再現

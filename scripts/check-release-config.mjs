@@ -30,8 +30,8 @@ if (configuredPublicKey) {
 }
 if (process.env.REQUIRE_RELEASE_KEY === "1") {
   if (!configuredPublicKey) errors.push("TAURI_UPDATER_PUBLIC_KEY repository variable is required");
-  if (!process.env.TAURI_SIGNING_PRIVATE_KEY) errors.push("TAURI_SIGNING_PRIVATE_KEY secret is required");
-  if (process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) errors.push("TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret is required");
+  if (!process.env.TAURI_SIGNING_PRIVATE_KEY?.trim()) errors.push("TAURI_SIGNING_PRIVATE_KEY secret is required");
+  if (!process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD?.trim()) errors.push("TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret is required");
   if (config.plugins.updater.pubkey.startsWith("REPLACE_")) errors.push("updater public key placeholder is not releasable");
 }
 

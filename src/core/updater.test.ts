@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { canCheckForUpdate, ownsUpdater, UPDATE_CHECK_COOLDOWN_MS, UpdateController, type UpdateRuntime } from "./updater";
 
 function runtime(update: Awaited<ReturnType<UpdateRuntime["check"]>> = null): UpdateRuntime {
-  return { check: vi.fn().mockResolvedValue(update), relaunch: vi.fn().mockResolvedValue(undefined) };
+  return { check: vi.fn().mockResolvedValue(update) };
 }
 
 describe("controller-owned updater", () => {
@@ -31,10 +31,9 @@ describe("controller-owned updater", () => {
     const states: string[] = [];
     await controller.check((state) => states.push(state.status));
     expect(states).toEqual(["checking", "up-to-date"]);
-    expect(adapter.relaunch).not.toHaveBeenCalled();
   });
 
-  it("requires separate user calls before download, install, and relaunch", async () => {
+  it("requires separate user calls before download and install", async () => {
     const update = { currentVersion: "0.1.0", version: "0.2.0", notes: "notes", download: vi.fn().mockResolvedValue(undefined), install: vi.fn().mockResolvedValue(undefined) };
     const adapter = runtime(update);
     const controller = new UpdateController(adapter);
@@ -45,15 +44,13 @@ describe("controller-owned updater", () => {
     await controller.download(() => undefined);
     expect(controller.snapshot().status).toBe("ready");
     expect(update.install).not.toHaveBeenCalled();
-    await controller.installAndRelaunch(() => undefined);
+    await controller.install(() => undefined);
     expect(update.install).toHaveBeenCalledOnce();
-    expect(adapter.relaunch).toHaveBeenCalledOnce();
   });
 
   it("keeps update failures non-fatal", async () => {
-    const adapter: UpdateRuntime = { check: vi.fn().mockRejectedValue(new Error("network unavailable")), relaunch: vi.fn() };
+    const adapter: UpdateRuntime = { check: vi.fn().mockRejectedValue(new Error("network unavailable")) };
     const controller = new UpdateController(adapter);
     await expect(controller.check(() => undefined)).resolves.toMatchObject({ status: "error", error: "network unavailable" });
-    expect(adapter.relaunch).not.toHaveBeenCalled();
   });
 });

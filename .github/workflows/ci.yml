@@ -32,4 +32,4 @@ jobs:
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
       - name: Unsigned NSIS bundle smoke
-        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.ci.conf.json
+        run: pnpm run build:unsigned
