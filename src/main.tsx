@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -22,7 +22,9 @@ import "./styles.css";
 const fromPreset = (preset: Preset, displayId: string): TabGroup => ({ id: crypto.randomUUID(), presetId: preset.id, name: preset.name, displayId, frame: preset.frame, tabs: preset.tabs.map((tab) => ({ ...tab, status: "unresolved" })) });
 const hostGroupId = new URLSearchParams(window.location.search).get("group") ?? undefined;
 const isController = ownsUpdater(hostGroupId);
-const COMPACT_HEIGHT = 120;
+// CSS layout uses logical pixels.  Native window frames are physical pixels, so
+// the host height is converted with the monitor scale factor before it is set.
+const COMPACT_LOGICAL_HEIGHT = 120;
 const OVERLAY_HEIGHT = 640;
 const RELEASES_URL = "https://github.com/YuyaIsh/window-tabs/releases";
 type ControllerCommand =
@@ -45,13 +47,6 @@ type ControllerCommand =
   | { type: "host-moved"; groupId: string; x: number; y: number }
   | { type: "dissolve-group"; groupId: string };
 
-const pinBarTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
-  if (isController) return;
-  const appWindow = getCurrentWindow();
-  const bar = calculateTabBarFrame(frame, display);
-  await appWindow.setSize(new PhysicalSize(bar.width, COMPACT_HEIGHT));
-  await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
-};
 const normalizeFrame = (frame: WindowInfo["frame"], display: DisplayInfo | undefined) => !display ? { x: 0.1, y: 0.1, width: 0.8, height: 0.8 } : { x: (frame.x - display.workArea.x) / display.workArea.width, y: (frame.y - display.workArea.y) / display.workArea.height, width: frame.width / display.workArea.width, height: frame.height / display.workArea.height };
 const denormalizeFrame = (frame: TabGroup["frame"], display: DisplayInfo): WindowInfo["frame"] => ({ x: Math.round(display.workArea.x + display.workArea.width * frame.x), y: Math.round(display.workArea.y + display.workArea.height * frame.y), width: Math.round(display.workArea.width * frame.width), height: Math.round(display.workArea.height * frame.height) });
 const displayForFrame = (frame: WindowInfo["frame"], displays: DisplayInfo[]) => {
@@ -59,6 +54,7 @@ const displayForFrame = (frame: WindowInfo["frame"], displays: DisplayInfo[]) =>
   const centerY = frame.y + frame.height / 2;
   return displays.find((display) => centerX >= display.workArea.x && centerX < display.workArea.x + display.workArea.width && centerY >= display.workArea.y && centerY < display.workArea.y + display.workArea.height) ?? displays.find((display) => display.primary);
 };
+const hostPositionKey = (x: number, y: number) => `${x}:${y}`;
 
 function App() {
   const [windows, setWindows] = useState<WindowInfo[]>([]);
@@ -81,7 +77,9 @@ function App() {
   const pendingFrameMutations = useRef(new Map<string, number>());
   const settledFrameTimers = useRef(new Map<string, number>());
   const missingWindowPolls = useRef(new Map<string, number>());
-  const workspaceChannel = useRef<BroadcastChannel | null>(null);
+  // Moving a host to follow its real window also emits `onMoved`.  Keep the
+  // expected positions briefly so that event is never mistaken for a user drag.
+  const pinnedHostPositions = useRef(new Map<string, number>());
   const workspaceRef = useRef(workspace);
   const windowsRef = useRef(windows);
   const displaysRef = useRef(displays);
@@ -101,11 +99,26 @@ function App() {
     try { await windowBackend.setFrame(id, frame); }
     catch (reason) { const message = reason instanceof Error ? reason.message : "ウィンドウの配置を更新できませんでした。"; pendingFrameMutations.current.delete(id); recordDiagnostic("error", message); setError(message); }
   };
-  const sendCommand = (command: ControllerCommand) => workspaceChannel.current?.postMessage({ type: "controller-command", command });
+  const pinBarTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
+    if (isController) return;
+    const appWindow = getCurrentWindow();
+    const bar = calculateTabBarFrame(frame, display);
+    pinnedHostPositions.current.set(hostPositionKey(bar.x, bar.y), Date.now() + 1_000);
+    // Position first: after moving across monitors, scaleFactor() describes the
+    // destination monitor and keeps the CSS-height tab bar intact at any DPI.
+    await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
+    const scaleFactor = await appWindow.scaleFactor();
+    await appWindow.setSize(new PhysicalSize(bar.width, Math.round(COMPACT_LOGICAL_HEIGHT * scaleFactor)));
+  };
+  const sendCommand = (command: ControllerCommand) => { void emit("workspace-command", command).catch(() => undefined); };
   const applyUpdateState = (state: UpdateState) => {
     setUpdateState(state);
     if (state.status === "available") setUpdateOpen(true);
     if (state.status === "error" && state.error) recordDiagnostic("error", `Update: ${state.error}`);
+  };
+  const startHostDrag = (event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || !(event.target instanceof HTMLElement) || event.target.closest("button, [draggable='true']")) return;
+    void getCurrentWindow().startDragging().catch(() => undefined);
   };
   const checkForUpdates = (manual: boolean) => {
     if (!isController || !updater.current) return;
@@ -157,20 +170,38 @@ function App() {
     return () => window.clearTimeout(timer);
   }, []);
   useEffect(() => {
-    const channel = new BroadcastChannel("window-tabs-workspace");
-    workspaceChannel.current = channel;
-    channel.onmessage = ({ data }) => {
-      if (data?.type === "workspace-request" && isController) channel.postMessage({ type: "workspace-snapshot", workspace: workspaceRef.current, windows: windowsRef.current, displays: displaysRef.current, presets: presetsRef.current });
-      if (data?.type === "workspace-snapshot" && !isController && data.workspace) { workspaceSynced.current = true; suppressWorkspaceBroadcast.current = true; setWorkspace(data.workspace); if (Array.isArray(data.windows)) setWindows(data.windows); if (Array.isArray(data.displays)) setDisplays(data.displays); if (Array.isArray(data.presets)) setPresets(data.presets); }
-      if (data?.type === "controller-command" && isController) controllerCommandHandler.current?.(data.command);
-      if (data?.type === "tab-drag-start") {
-        const next = { sourceGroupId: data.groupId, tabId: data.tabId };
+    // Tauri webviews do not reliably share a browser BroadcastChannel.  Use the
+    // app event bus so every separately-created group host sees controller state.
+    const requestUnlisten = listen("workspace-request", () => {
+      if (isController) void emit("workspace-snapshot", { workspace: workspaceRef.current, windows: windowsRef.current, displays: displaysRef.current, presets: presetsRef.current }).catch(() => undefined);
+    });
+    const snapshotUnlisten = listen<{ workspace?: typeof workspace; windows?: WindowInfo[]; displays?: DisplayInfo[]; presets?: Preset[] }>("workspace-snapshot", ({ payload }) => {
+      if (!isController && payload.workspace) {
+        workspaceSynced.current = true;
+        suppressWorkspaceBroadcast.current = true;
+        setWorkspace(payload.workspace);
+        if (Array.isArray(payload.windows)) setWindows(payload.windows);
+        if (Array.isArray(payload.displays)) setDisplays(payload.displays);
+        if (Array.isArray(payload.presets)) setPresets(payload.presets);
+      }
+    });
+    const commandUnlisten = listen<ControllerCommand>("workspace-command", ({ payload }) => {
+      if (isController) controllerCommandHandler.current?.(payload);
+    });
+    const dragStartUnlisten = listen<{ groupId: string; tabId: string }>("tab-drag-start", ({ payload }) => {
+      if (payload) {
+        const next = { sourceGroupId: payload.groupId, tabId: payload.tabId };
         tabDragCancelled.current = false; tabDragSessionRef.current = next; setTabDragSession(next);
       }
-      if (data?.type === "tab-drag-end") { tabDragSessionRef.current = null; setTabDragSession(null); }
+    });
+    const dragEndUnlisten = listen("tab-drag-end", () => { tabDragSessionRef.current = null; setTabDragSession(null); });
+    const requestSync = () => { void emit("workspace-request").catch(() => undefined); };
+    const retry = hostGroupId ? window.setInterval(() => { if (!workspaceSynced.current) requestSync(); }, 300) : undefined;
+    if (hostGroupId) window.setTimeout(requestSync, 0);
+    return () => {
+      if (retry) window.clearInterval(retry);
+      for (const unlisten of [requestUnlisten, snapshotUnlisten, commandUnlisten, dragStartUnlisten, dragEndUnlisten]) void unlisten.then((dispose) => dispose());
     };
-    if (hostGroupId) channel.postMessage({ type: "workspace-request" });
-    return () => channel.close();
   }, []);
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -179,7 +210,7 @@ function App() {
     presetsRef.current = presets;
     if (!isController || !workspaceSynced.current) return;
     if (suppressWorkspaceBroadcast.current) { suppressWorkspaceBroadcast.current = false; return; }
-    workspaceChannel.current?.postMessage({ type: "workspace-snapshot", workspace, windows: windowsRef.current, displays: displaysRef.current, presets });
+    void emit("workspace-snapshot", { workspace, windows: windowsRef.current, displays: displaysRef.current, presets }).catch(() => undefined);
   }, [workspace, windows, displays, presets]);
   useEffect(() => {
     if (!isController) return;
@@ -204,7 +235,7 @@ function App() {
     const connected = group?.tabs.map((tab) => tab.runtimeWindowId).find(Boolean);
     const windowInfo = windows.find((item) => item.id === connected);
     if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
-    void getCurrentWindow().setSize(new LogicalSize(720, COMPACT_HEIGHT));
+    void getCurrentWindow().setSize(new LogicalSize(720, COMPACT_LOGICAL_HEIGHT));
   }, [group, picker, presetManager, diagnosticsOpen, updateOpen, windows, displays]);
   useEffect(() => {
     if (!hostGroupId || !group) return;
@@ -228,7 +259,14 @@ function App() {
     let dispose: (() => void) | undefined;
     void getCurrentWindow().onMoved(({ payload }) => {
       if (!group) return;
-      if (!isController) { sendCommand({ type: "host-moved", groupId: group.id, x: payload.x, y: payload.y }); return; }
+      if (!isController) {
+        const key = hostPositionKey(payload.x, payload.y);
+        const until = pinnedHostPositions.current.get(key);
+        if (until && until >= Date.now()) return;
+        pinnedHostPositions.current.delete(key);
+        sendCommand({ type: "host-moved", groupId: group.id, x: payload.x, y: payload.y });
+        return;
+      }
       const frame = { x: payload.x, y: payload.y + TAB_BAR_OFFSET, width: Math.max(1, Math.round(group.frame.width * (displays.find((display) => display.id === group.displayId)?.workArea.width ?? 1))), height: Math.max(1, Math.round(group.frame.height * (displays.find((display) => display.id === group.displayId)?.workArea.height ?? 1))) };
       const display = displayForFrame(frame, displays);
       if (!display) return;
@@ -287,7 +325,11 @@ function App() {
         const timer = window.setTimeout(() => setWorkspace((current) => {
           const now = Date.now();
           const until = pendingFrameMutations.current.get(payload.id);
-          if (until && until >= now) { pendingFrameMutations.current.delete(payload.id); return current; }
+          // A single SetWindowPos often produces several location events.  Keep
+          // the guard for its whole lifetime instead of consuming it on the
+          // first event, otherwise a later self-event can resize the group back.
+          if (until && until >= now) return current;
+          if (until) pendingFrameMutations.current.delete(payload.id);
           const owner = groupForWindow(current, payload.id);
           if (!owner || owner.activeTabId !== owner.tabs.find((tab) => tab.runtimeWindowId === payload.id)?.id) return current;
           for (const tab of owner.tabs) if (tab.runtimeWindowId && tab.runtimeWindowId !== payload.id) void setFrame(tab.runtimeWindowId, frame);
@@ -433,7 +475,7 @@ function App() {
   };
   const endTabDrag = () => {
     tabDragSessionRef.current = null;
-    workspaceChannel.current?.postMessage({ type: "tab-drag-end" });
+    void emit("tab-drag-end").catch(() => undefined);
     setDraggingTabId(null); setTabDragSession(null);
   };
   const releaseDraggedTab = (sourceGroupId: string, tabId: string) => {
@@ -446,7 +488,7 @@ function App() {
     const drag = { sourceGroupId, tabId };
     tabDragCancelled.current = false; tabDragSessionRef.current = drag;
     setDraggingTabId(tabId); setTabDragSession(drag);
-    workspaceChannel.current?.postMessage({ type: "tab-drag-start", groupId: sourceGroupId, tabId });
+    void emit("tab-drag-start", { groupId: sourceGroupId, tabId }).catch(() => undefined);
   };
   const dropTabOn = (destinationTabId: string) => {
     const drag = tabDragSessionRef.current;
@@ -589,7 +631,7 @@ function App() {
   };
 
   return <main>
-    <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" data-tauri-drag-region onDragOver={(event) => event.preventDefault()} onDrop={dropTabOnGroup}>
+    <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" onMouseDown={startHostDrag} onDragOver={(event) => event.preventDefault()} onDrop={dropTabOnGroup}>
       <div className="group-menu"><button className="group-name" onClick={() => setMenuOpen((value) => !value)}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
