@@ -63,6 +63,8 @@ platform 側で launcher host を持つ。
 
 launcher からプリセット選択、新規グループ、設定画面を開く。
 
+初期 `main` WebViewは非表示のcontrollerとして、workspace mutation、native event、host lifecycleに加え、updater check/download/installを一意に所有する。secondary group hostはsnapshotを受け取りcommandをcontrollerへ送るだけで、updater pluginを直接呼ばない。
+
 プリセット内の接続済みウィンドウが 0 件でも、保存済み frame にタブバーだけを作成できるようにする。
 
 ## 共通モデル
@@ -329,6 +331,12 @@ Windows と macOS のプリセットファイル形式は共通にできるが�
 - process ID
 
 これらは再起動後に再取得する。
+
+presetはproduction identifier `io.github.yuyaish.window-tabs` に属するWebView application dataのlocal storageへ保存し、installer directoryへ保存しない。同じidentifierを維持するNSIS upgrade/Tauri updateで保持する設計とするが、実際のN→N+1保持はrelease acceptanceで検証する。
+
+## Distribution boundary
+
+Windows bundleはx86_64 NSIS、update sourceはpublic GitHub Releasesの`latest.json`とする。Tauri Updaterのpublic keyはbuild configへ含め、private signing key/passwordはrelease workflowだけへSecretsとして注入する。PR CIはconfig overrideでupdater artifact生成を無効化し、production signing chainから分離する。詳細は `DISTRIBUTION.md` を参照する。
 
 ## ディスプレイ識別
 

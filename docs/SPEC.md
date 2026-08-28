@@ -335,3 +335,8 @@ Windows 10 上で次を満たすこと。
 10. プリセットを保存できる
 11. アプリ / PC 再起動後に、一意に識別可能なウィンドウへ再接続できる
 12. 識別不能な候補を誤接続せず手動選択へ回せる
+13. public GitHub Releaseのx86_64 NSIS `setup.exe`で通常install/uninstallできる
+14. 起動時またはtrayから新versionを検知し、署名検証済みartifactだけをユーザー操作でinstallできる。Windowsのrestartはupdater installerが担う。
+15. update後もpreset/settingsが保持され、update failure時も現在versionを利用できる
+
+13〜15はpublic ReleaseとWindows実機で観測するまでPASSとしない。

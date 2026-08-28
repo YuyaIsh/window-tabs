@@ -229,6 +229,32 @@ v1 の実機検証と回帰対象は Windows 10 とする。Windows 11 と Snap 
 
 実機 GUI の未確認項目は PASS と扱わず、phase review に残す。ただしユーザーが明示的に継続を指示した場合は後続実装を開始できる。Windows v1 の最終 APPROVE は保留し、未確認項目をすべて実施するまで完了とは扱わない。
 
+## D-024: distribution のため repository を public 化する
+
+**Status:** Accepted
+
+D-018 の個人利用優先は維持するが、「公開前提にはしない」という配布部分を supersede する。Phase 6 implementation のreviewと履歴secret scanが完了した後、`YuyaIsh/window-tabs` をpublic化し、認証不要のinstaller/updater配布を可能にする。licenseは別の明示判断であり、本decisionだけでは追加しない。
+
+public化はbranch変更ではなくrepository-wide operationなので、implementation PR内では実行しない。
+
+## D-025: Windows v1 は NSIS installer と Tauri v2 Updater を含む
+
+**Status:** Accepted
+
+Windows v1の正式な初回導線をx86_64 NSIS `setup.exe`、更新導線を署名必須のTauri v2 Updaterとする。起動時に1回確認し、手動確認も提供する。downloadとinstallはユーザーの明示操作後だけ行う。Windowsではupdaterがinstallerを起動するとアプリプロセスを終了し、installerが更新後の再起動を扱うため、frontendからのprocess-plugin再起動は使わない。Microsoft StoreとWindows Authenticode証明書購入はv1の必須条件にしない。
+
+## D-026: GitHub Releases を単一の配布・更新sourceにする
+
+**Status:** Accepted
+
+installer、updater artifact、signature、`latest.json` はpublic GitHub Releasesから配布し、自前update serverや配布専用repositoryは持たない。アプリにはPATやGitHub tokenを埋め込まない。release workflowはGitHub提供の短命な`GITHUB_TOKEN`をleast privilegeで使う。
+
+## D-027: production identifier を固定する
+
+**Status:** Accepted
+
+初回public release前のproduction identifierを `io.github.yuyaish.window-tabs` とする。公開release後はinstaller identityとWebView/application dataの継続性を守るため、migration planなしに変更しない。pre-releaseの `local.window-tabs` に属するlocal dataは自動migration対象外とする。
+
 ## 後から決めてよい事項
 
 次は実装を止める判断ではない。Windows の試作結果を見て決める。
