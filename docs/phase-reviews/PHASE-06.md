@@ -73,6 +73,7 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 - P1 — The existing opener JS package lacked Rust plugin initialization, breaking the fallback capability. Fixed with `tauri-plugin-opener` and builder initialization.
 - P1 — Plugin JSON config required an explicit `serde_json` dependency for generated context compilation. Fixed and recompiled.
 - P2 — The private-key scanner initially matched its own minisign marker. Fixed by constructing the marker from fragments; repository scan now passes.
+- P2 — First GitHub CI run rejected duplicate pnpm version declarations in `package.json` and `pnpm/action-setup`. Fixed by letting the action read the pinned `packageManager`; local actionlint passed before rerun.
 
 Independent base-diff re-review found no remaining secret exposure, destructive updater/data-loss path, release/config mismatch, ownership regression, or false manual PASS.
 
