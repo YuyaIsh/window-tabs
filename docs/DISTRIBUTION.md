@@ -73,7 +73,7 @@ The release workflow injects the public key into the build-only config without l
 5. The workflow atomically creates `v<version>` at the merged commit; Tauri action then creates and publishes `window-tabs v<version>` and uploads the setup/updater/signature/`latest.json` assets.
 6. Verify unauthenticated setup/latest.json downloads and perform the clean-install or N→N+1 smoke appropriate for the release.
 
-No normal release step requires manually creating or pushing a tag, creating a GitHub Release, or publishing a draft Release. The workflow stops with a clear error if the application version already has a tag.
+No normal release step requires manually creating or pushing a tag, creating a GitHub Release, or publishing a draft Release. The workflow stops with a clear error if the application version already has a tag for another commit or an existing Release. A retry may resume only an incomplete attempt whose tag already points to the same merged commit and has no Release yet; it never force-updates a tag or overwrites an existing Release.
 
 ### Ongoing distribution verification
 

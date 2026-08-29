@@ -31,8 +31,6 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
           targets: x86_64-pc-windows-msvc
-      - name: Check release version is unused
-        run: pnpm run check:release-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm run build
@@ -70,11 +68,29 @@ jobs:
               });
               core.info(`Created ${tag} for ${context.sha}.`);
             } catch (error) {
-              if (error.status === 422) {
+              if (error.status !== 422) throw error;
+
+              const existingRef = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+              if (existingRef.data.object.type !== 'commit' || existingRef.data.object.sha !== context.sha) {
                 core.setFailed(`${tag} already exists. Bump the application version before releasing.`);
                 return;
               }
-              throw error;
+
+              try {
+                await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag,
+                });
+                core.setFailed(`${tag} already exists. Bump the application version before releasing.`);
+              } catch (releaseError) {
+                if (releaseError.status !== 404) throw releaseError;
+                core.warning(`${tag} already points to this commit but has no Release; resuming the incomplete release attempt.`);
+              }
             }
       # action-v1.0.0. Keep the full immutable revision for reviewable releases.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
