@@ -1,7 +1,7 @@
 {
   "name": "window-tabs",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "build:unsigned": "pnpm run build && pnpm tauri build --config src-tauri/tauri.ci.conf.json --target x86_64-pc-windows-msvc --bundles nsis",
     "check:release": "node scripts/check-release-config.mjs",
+    "check:release-version": "node scripts/check-release-version.mjs",
+    "check:version-bump": "node scripts/check-version-bump.mjs",
     "check:secrets": "node scripts/check-no-private-keys.mjs"
   },
   "dependencies": {

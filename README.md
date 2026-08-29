@@ -14,6 +14,6 @@ pnpm tauri dev
 
 ## Distribution status
 
-Release workflow、installer/updater構成、署名と公開手順は [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) にあります。public Release、clean install、N→N+1 updateの実機確認が完了するまでWindows v1は承認済みではありません。
+通常の配布は、versionを3箇所で更新したPRを `main` にmergeすると、GitHub ActionsがWindows build、署名、`v<version>` tag、GitHub Release公開まで自動実行します。Release workflow、installer/updater構成、署名と公開手順は [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) にあります。public Release、clean install、N→N+1 updateの実機確認が完了するまでWindows v1は承認済みではありません。
 
 このrepositoryにlicenseは現在設定されていません。public visibilityはlicense付与を意味しません。

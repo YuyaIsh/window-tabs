@@ -2,13 +2,12 @@ name: Release Windows
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing SemVer tag to release (for example v0.1.0)
-        required: true
-        type: string
+    branches:
+      - main
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -21,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -32,6 +31,8 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
           targets: x86_64-pc-windows-msvc
+      - name: Check release version is unused
+        run: pnpm run check:release-version
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm run build
@@ -43,7 +44,6 @@ jobs:
         run: pnpm run check:release
         env:
           REQUIRE_RELEASE_KEY: "1"
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -54,10 +54,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          releaseName: window-tabs ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tagName: v__VERSION__
+          releaseName: window-tabs v__VERSION__
           releaseBody: Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
+          uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: --target x86_64-pc-windows-msvc --bundles nsis

@@ -11,17 +11,17 @@ Status: **IN_REVIEW; release acceptance remains BLOCKED: RELEASE VERIFICATION**
 - Controller-only startup/manual checks with a 60-second process cooldown.
 - User-separated check, download, install actions; on Windows the updater installer owns process exit/restart, with no polling or silent update.
 - Update state/error UI, diagnostics, and Releases fallback.
-- PR CI without signing secrets and a release-only signing workflow using draft GitHub Releases.
+- PR CI without signing secrets and a main-push release-only signing workflow with automatically published GitHub Releases.
 - SemVer/config/tag checks and tracked-private-key scan.
 - D-024 through D-027 and the distribution runbook.
 
 ## Automated checks
 
-- `pnpm test` — PASS (11 files, 36 tests; updater cooldown/ownership/state/no-update/available/error/consent included).
+- `pnpm test` — PASS (13 files, 46 tests; updater cooldown/ownership/state/no-update/available/error/consent and release automation helpers included).
 - `pnpm run build` — PASS (TypeScript and Vite production build).
-- `pnpm run check:release` — PASS (SemVer/config/identity/endpoint/NSIS/capability assumptions).
+- `pnpm run check:release` — PASS for `0.1.1` (SemVer/config/identity/endpoint/NSIS/capability assumptions).
 - Release-key fail-closed check — PASS; absent public key/private key/password rejects release configuration.
-- `pnpm run check:secrets` — PASS (122 tracked/untracked non-ignored repository files).
+- `pnpm run check:secrets` — PASS (126 tracked/untracked non-ignored repository files).
 - `actionlint 1.7.12 .github/workflows/*.yml` — PASS; downloaded archive checksum verified.
 - `git diff --check` — PASS.
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS.
@@ -42,7 +42,7 @@ Updater private key/password were not generated, displayed, or committed. The ch
 ## Distribution checks
 
 - Configuration/schema validation: PASS through Tauri build scripts, release-config check, Rust compile, and actionlint.
-- Unsigned local NSIS build: PASS using the CI config override; generated `window-tabs_0.1.0_x64-setup.exe` under the local Windows build target.
+- Unsigned local NSIS build: PASS using the CI config override; the recorded artifact was `window-tabs_0.1.0_x64-setup.exe` before the release-automation version bump.
 - Normal signed `pnpm tauri build`: NOT RUN; production signing key/public key are intentionally unavailable. The unsigned CI-equivalent bundle does not prove updater signing.
 - Signed updater artifact / `.sig` / `latest.json`: NOT RUN (signing key intentionally unavailable).
 - GitHub Actions release reproduction: NOT RUN.
@@ -80,6 +80,15 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 - P2 — Docs implied that an unsigned installer could be built with normal `pnpm tauri build`. Fixed with the explicit `pnpm run build:unsigned` CI-equivalent script and documentation that normal builds require signing-key environment variables.
 
 The fixes require reviewer re-review before code approval is restored.
+
+## Release automation follow-up
+
+- The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.1`.
+- `.github/workflows/release.yml` now runs on `main` pushes only. It does not run from tag pushes or require a manual dispatch/tag.
+- `check:release-version` checks the remote `v<version>` tag before any build or Release creation and stops with `Bump the application version before releasing.` when it already exists.
+- The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow.
+- PR CI checks that release-impacting code/dependency changes change the application version; documentation, README, and comment-only changes do not require a bump.
+- The release workflow uses a non-canceling concurrency group so queued `main` releases re-check the tag after the earlier release completes.
 
 Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
 

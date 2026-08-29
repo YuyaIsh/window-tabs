@@ -54,21 +54,32 @@ The release workflow injects the public key into the build-only config without l
 
 `.github/workflows/ci.yml` runs on Windows for PRs and `main`: frozen pnpm install, frontend tests/build, release-config checks, tracked-private-key scan, Rust fmt/clippy/test, and unsigned NSIS smoke. It has read-only repository permissions and no signing secrets.
 
-`.github/workflows/release.yml` runs only for SemVer tags or an explicit existing-tag dispatch. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. It produces NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, then creates a draft GitHub Release. `updaterJsonPreferNsis` prevents MSI selection.
+`.github/workflows/release.yml` runs on pushes to `main`, which includes the normal pull-request merge path. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. Before building, it rejects a version whose `v<version>` tag already exists. The Tauri action then creates that tag from the built application version, uploads the NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, and publishes the GitHub Release automatically. `updaterJsonPreferNsis` prevents MSI selection. The workflow is not triggered by tag pushes, so the tag created by the action cannot recursively start another release.
 
 ## Release procedure
 
+### One-time prerequisites
+
 1. Complete the Phase 6 PR review and confirm unresolved P0/P1/P2 = 0.
 2. Complete the full-history secret review, then explicitly change repository visibility to public.
-3. Generate the signing key, commit or configure its public key, create both signing Secrets, create the public-key Variable, and verify the independent encrypted backup.
-4. Bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the same SemVer.
-5. Run all local checks and merge the reviewed change.
-6. Create and push `v<version>`; inspect the draft Release assets and workflow logs for leakage.
-7. Publish the Release, then verify unauthenticated setup/latest.json downloads.
-8. Perform clean install/start/tray/uninstall smoke.
-9. For N+1, install N, save a preset/settings, publish N+1, check/download/install, allow the Windows updater installer to restart, and verify retained data.
-10. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
-11. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
+3. Generate the signing key, configure its public key, create both signing Secrets, create the public-key Variable, and verify the independent encrypted backup.
+
+### Normal release
+
+1. In the implementation PR, bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the same next SemVer.
+2. Complete review and CI, including the release-impacting-change version-bump check.
+3. Merge the PR into `main`.
+4. The Release workflow automatically runs its preflight checks, builds and signs the Windows x86_64 NSIS bundle, and verifies that `v<version>` is unused.
+5. Tauri action automatically creates `v<version>`, uploads the setup/updater/signature/`latest.json` assets, and publishes `window-tabs v<version>`.
+6. Verify unauthenticated setup/latest.json downloads and perform the clean-install or N→N+1 smoke appropriate for the release.
+
+No normal release step requires manually creating or pushing a tag, creating a GitHub Release, or publishing a draft Release. The workflow stops with a clear error if the application version already has a tag.
+
+### Ongoing distribution verification
+
+1. For N+1, install N, save a preset/settings, merge the version-bumped PR, allow the Windows updater installer to restart, and verify retained data.
+2. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
+3. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
 
 ## Acceptance gate
 
