@@ -85,8 +85,8 @@ The fixes require reviewer re-review before code approval is restored.
 
 - The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.1`.
 - `.github/workflows/release.yml` now runs on `main` pushes only. It does not run from tag pushes or require a manual dispatch/tag.
-- Before Release creation, `actions/github-script` atomically creates the version-derived tag at the current commit with `GITHUB_TOKEN` and stops with `Bump the application version before releasing.` for a tag on another commit or an existing Release. A retry may resume only a same-commit tag with no Release, without force-updating the tag or overwriting assets.
-- The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow. The action creates the Release and uploads assets for that immutable tag.
+- Before Release creation, `actions/github-script` atomically creates the version-derived tag at the current commit and a new published Release with `GITHUB_TOKEN`. It stops with `Bump the application version before releasing.` for a tag on another commit or an existing Release. A retry may resume only a same-commit tag with no Release, without force-updating the tag or overwriting assets.
+- The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `releaseId`, `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow. The action builds and uploads assets for that immutable Release.
 - PR CI checks that release-impacting code/dependency changes change the application version; documentation, README, and comment-only changes do not require a bump.
 - The release workflow uses a non-canceling concurrency group so queued `main` releases re-check the tag after the earlier release completes.
 
