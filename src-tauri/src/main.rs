@@ -680,14 +680,15 @@ fn set_group_host_expanded(
         use windows::Win32::{
             Foundation::HWND,
             UI::WindowsAndMessaging::{
-                SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+                GetAncestor, SetWindowPos, GA_ROOT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
             },
         };
         let raw = window.hwnd().map_err(|error| error.to_string())?;
         let hwnd = HWND(raw.0 as *mut c_void);
         unsafe {
+            let root = GetAncestor(hwnd, GA_ROOT);
             SetWindowPos(
-                hwnd,
+                root,
                 HWND::default(),
                 0,
                 0,
