@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newGroup } from "./groups";
 import type { WindowInfo } from "./model";
-import { activeGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, selectGroup, updateActiveGroup } from "./workspace";
+import { activeGroup, activeOrLatestGroup, addGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, moveTabToGroup, reconnectWorkspace, removeClosedWindow, selectGroup, updateActiveGroup } from "./workspace";
 
 const window = (id: string): WindowInfo => ({ id, processId: 1, appId: "app.exe", appName: "App", title: id, frame: { x: 0, y: 0, width: 100, height: 100 }, displayId: "primary", state: "normal" });
 
@@ -12,6 +12,12 @@ describe("workspace", () => {
     const workspace = selectGroup(addGroup(addGroup(emptyWorkspace(), one), two), one.id);
     expect(activeGroup(workspace)?.id).toBe(one.id);
     expect(workspace.groups).toHaveLength(2);
+  });
+  it("falls back to the latest group when the active id is temporarily missing", () => {
+    const one = newGroup(window("one"));
+    const two = newGroup(window("two"));
+    expect(activeOrLatestGroup({ groups: [one, two] })?.id).toBe(two.id);
+    expect(activeOrLatestGroup({ groups: [one, two], activeGroupId: one.id })?.id).toBe(one.id);
   });
   it("removes only the active group", () => {
     const one = newGroup(window("one"));
@@ -49,5 +55,13 @@ describe("workspace", () => {
   it("dissolves a one-tab group only through the explicit command", () => {
     const group = newGroup(window("one"));
     expect(dissolveGroup(addGroup(emptyWorkspace(), group), group.id).groups).toHaveLength(0);
+  });
+  it("selects a surviving tab when the active runtime window closes", () => {
+    const first = newGroup(window("one"));
+    const secondTab = newGroup(window("two")).tabs[0];
+    const group = { ...first, tabs: [...first.tabs, secondTab] };
+    const next = removeClosedWindow(addGroup(emptyWorkspace(), group), "one");
+    expect(next.groups[0].tabs.map((tab) => tab.runtimeWindowId)).toEqual(["two"]);
+    expect(next.groups[0].activeTabId).toBe(secondTab.id);
   });
 });

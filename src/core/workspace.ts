@@ -10,6 +10,10 @@ export function activeGroup(workspace: Workspace): TabGroup | null {
   return workspace.groups.find((group) => group.id === workspace.activeGroupId) ?? null;
 }
 
+export function activeOrLatestGroup(workspace: Workspace): TabGroup | null {
+  return activeGroup(workspace) ?? workspace.groups.at(-1) ?? null;
+}
+
 export function updateActiveGroup(workspace: Workspace, update: (group: TabGroup | null) => TabGroup | null): Workspace {
   const current = activeGroup(workspace);
   const next = update(current);
@@ -56,6 +60,18 @@ export function dissolveGroup(workspace: Workspace, groupId: string): Workspace 
 
 export function groupForWindow(workspace: Workspace, windowId: WindowId): TabGroup | null {
   return workspace.groups.find((group) => group.tabs.some((tab) => tab.runtimeWindowId === windowId)) ?? null;
+}
+
+export function removeClosedWindow(workspace: Workspace, windowId: WindowId): Workspace {
+  const groups = workspace.groups.flatMap((group) => {
+    if (group.presetId) {
+      return [{ ...group, tabs: group.tabs.map((tab) => tab.runtimeWindowId === windowId ? { ...tab, runtimeWindowId: undefined, status: "unresolved" as const } : tab) }];
+    }
+    const tabs = group.tabs.filter((tab) => tab.runtimeWindowId !== windowId);
+    if (!tabs.length) return [];
+    return [{ ...group, tabs, activeTabId: tabs.some((tab) => tab.id === group.activeTabId) ? group.activeTabId : tabs[0].id }];
+  });
+  return { groups, activeGroupId: groups.some((group) => group.id === workspace.activeGroupId) ? workspace.activeGroupId : groups[0]?.id };
 }
 
 export function moveTabToGroup(workspace: Workspace, sourceGroupId: string, tabId: string, destinationGroupId: string): Workspace {

@@ -19,5 +19,7 @@ export class MockWindowBackend implements WindowBackend {
   async setFrame(id: WindowId, frame: Rect) { this.windows = this.windows.map((window) => window.id === id ? { ...window, frame } : window); }
   async openGroupHost(groupId: string) { this.groupHosts.add(groupId); }
   async closeGroupHost(groupId: string) { this.groupHosts.delete(groupId); }
+  async raiseGroupHost(_groupId: string) {}
+  async showGroupMenu(_groupId: string, _items: Array<{ id: string; label: string; enabled: boolean }>) {}
   async setTrayPresets(_presets: Array<{ id: string; name: string }>) {}
 }

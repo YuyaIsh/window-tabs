@@ -15,6 +15,13 @@ struct TrayPreset {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct GroupMenuItem {
+    id: String,
+    label: String,
+    enabled: bool,
+}
+
 fn tray_menu(app: &tauri::AppHandle, presets: &[TrayPreset]) -> tauri::Result<Menu<tauri::Wry>> {
     let new_group = MenuItem::with_id(app, "new-group", "新しいグループ", true, None::<&str>)?;
     let manager = MenuItem::with_id(app, "presets", "プリセットを管理…", true, None::<&str>)?;
@@ -204,6 +211,13 @@ mod windows_backend {
                 || !GetWindow(window, GW_OWNER).unwrap_or_default().0.is_null()
                 || (GetWindowLongW(window, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) != 0
                 || title(window).is_empty()
+            {
+                return false;
+            }
+            let mut rect = RECT::default();
+            if GetWindowRect(window, &mut rect).is_err()
+                || rect.right - rect.left < 120
+                || rect.bottom - rect.top < 80
             {
                 return false;
             }
@@ -459,8 +473,12 @@ mod windows_backend {
     #[tauri::command]
     pub fn set_window_frame(id: String, frame: Rect) -> Result<(), String> {
         unsafe {
+            let window = hwnd(&id)?;
+            if IsZoomed(window).as_bool() {
+                let _ = ShowWindow(window, SW_RESTORE);
+            }
             SetWindowPos(
-                hwnd(&id)?,
+                window,
                 HWND::default(),
                 frame.x,
                 frame.y,
@@ -560,6 +578,8 @@ fn main() {
             windows_backend::set_window_frame,
             open_group_host,
             close_group_host,
+            raise_group_host,
+            show_group_menu,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -582,9 +602,7 @@ fn set_tray_presets(
 #[tauri::command]
 async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
     let label = format!("group-{group_id}");
-    if let Some(window) = app.get_webview_window(&label) {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+    if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
     WebviewWindowBuilder::new(
@@ -593,11 +611,18 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
         WebviewUrl::App(format!("index.html?group={group_id}").into()),
     )
     .title("window-tabs")
-    .inner_size(720.0, 120.0)
+    .inner_size(720.0, 48.0)
+    .position(-32_000.0, -32_000.0)
     .resizable(false)
     .decorations(false)
-    .always_on_top(true)
+    .always_on_top(false)
     .skip_taskbar(true)
+    .visible(true)
+    .on_menu_event(|window, event| {
+        let _ = window
+            .app_handle()
+            .emit("group-menu-action", event.id().as_ref());
+    })
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())
@@ -610,4 +635,58 @@ fn close_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
         window.close().map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), String> {
+    let label = format!("group-{group_id}");
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| "group host is unavailable".to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            },
+        };
+        let raw = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(raw.0);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_group_menu(
+    app: tauri::AppHandle,
+    group_id: String,
+    items: Vec<GroupMenuItem>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(&format!("group-{group_id}"))
+        .ok_or_else(|| "group host is unavailable".to_string())?;
+    let menu_items = items
+        .iter()
+        .map(|item| MenuItem::with_id(&app, &item.id, &item.label, item.enabled, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    let references = menu_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect::<Vec<_>>();
+    let menu = Menu::with_items(&app, &references).map_err(|error| error.to_string())?;
+    window.popup_menu(&menu).map_err(|error| error.to_string())
 }
