@@ -30,6 +30,7 @@ type TabDragSession = { groupId: string; tabId: string };
 type ControllerCommand =
   | { type: "open-picker"; groupId?: string; creatingGroup?: boolean }
   | { type: "open-preset-manager" }
+  | { type: "open-diagnostics" }
   | { type: "add-window"; groupId?: string; windowId: string; assigningTabId?: string; creatingGroup: boolean }
   | { type: "select-tab"; groupId: string; tabId: string }
   | { type: "reorder-tab"; groupId: string; sourceTabId: string; destinationTabId: string }
@@ -204,6 +205,26 @@ function App() {
     setMenuOpen(expanded);
     if (group) setGroupHostExpanded(group.id, expanded);
   };
+  const openNativeGroupMenu = () => {
+    if (!group) { toggleGroupMenu(); return; }
+    const prefix = `${group.id}|`;
+    const otherGroups = workspace.groups.filter((item) => item.id !== group.id);
+    const items = [
+      { id: `${prefix}new`, label: "新しいグループ", enabled: true },
+      { id: `${prefix}save`, label: "現在のグループを保存…", enabled: true },
+      { id: `${prefix}rename`, label: "選択タブの名前を変更…", enabled: Boolean(group.activeTabId) },
+      { id: `${prefix}previous-display`, label: "前の画面へ", enabled: displays.length > 1 },
+      { id: `${prefix}next-display`, label: "次の画面へ", enabled: displays.length > 1 },
+      { id: `${prefix}detach`, label: "選択タブを新しいグループへ", enabled: Boolean(group.activeTabId) },
+      { id: `${prefix}dissolve`, label: "グループを解除", enabled: true },
+      { id: `${prefix}presets`, label: "プリセットを管理…", enabled: true },
+      { id: `${prefix}diagnostics`, label: "診断ログを表示…", enabled: true },
+      ...otherGroups.map((item) => ({ id: `${prefix}focus|${item.id}`, label: `グループを開く: ${item.name} (${item.tabs.length})`, enabled: true })),
+      ...otherGroups.map((item) => ({ id: `${prefix}move|${item.id}`, label: `選択タブを移動: ${item.name}`, enabled: Boolean(group.activeTabId) })),
+      ...presets.map((preset) => ({ id: `${prefix}apply|${preset.id}`, label: `プリセットを適用: ${preset.name}`, enabled: true })),
+    ];
+    void windowBackend.showGroupMenu(group.id, items).catch((reason) => setError(String(reason)));
+  };
 
   const refresh = async () => {
     try {
@@ -321,6 +342,26 @@ function App() {
     const ended = listen("tab-drag-end", () => setTabDrag(null));
     return () => { for (const unlisten of [started, completed, ended]) void unlisten.then((dispose) => dispose()); };
   }, []);
+  useEffect(() => {
+    if (!group) return;
+    const action = listen<string>("group-menu-action", ({ payload }) => {
+      const [groupId, command, argument] = payload.split("|");
+      if (groupId !== group.id) return;
+      if (command === "new") sendCommand({ type: "open-picker", creatingGroup: true });
+      if (command === "save") sendCommand({ type: "save-preset", groupId });
+      if (command === "rename" && group.activeTabId) sendCommand({ type: "rename-tab", groupId, tabId: group.activeTabId });
+      if (command === "previous-display") sendCommand({ type: "move-display", groupId, direction: -1 });
+      if (command === "next-display") sendCommand({ type: "move-display", groupId, direction: 1 });
+      if (command === "detach" && group.activeTabId) sendCommand({ type: "detach-tab", groupId, tabId: group.activeTabId });
+      if (command === "dissolve") sendCommand({ type: "dissolve-group", groupId });
+      if (command === "presets") sendCommand({ type: "open-preset-manager" });
+      if (command === "diagnostics") sendCommand({ type: "open-diagnostics" });
+      if (command === "focus" && argument) sendCommand({ type: "focus-group", groupId: argument });
+      if (command === "move" && argument && group.activeTabId) sendCommand({ type: "move-tab", groupId, tabId: group.activeTabId, destinationGroupId: argument });
+      if (command === "apply" && argument) sendCommand({ type: "apply-preset", presetId: argument });
+    });
+    return () => { void action.then((dispose) => dispose()); };
+  }, [group, workspace.groups, presets, displays]);
   useEffect(() => {
     if (!hostGroupId || !group || menuOpen) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
@@ -628,6 +669,7 @@ function App() {
         setWorkspace((state) => command.groupId ? selectGroup(state, command.groupId) : state);
         setPickerContext(command.creatingGroup ? newGroupPickerContext() : command.groupId ? groupPickerContext(command.groupId) : closedPickerContext()); void refresh(); setPicker(true); break;
       case "open-preset-manager": setMenuOpen(false); setPresetManager(true); break;
+      case "open-diagnostics": setMenuOpen(false); setDiagnosticsOpen(true); break;
       case "add-window": {
         const windowInfo = windowsRef.current.find((item) => item.id === command.windowId);
         if (windowInfo) void add(windowInfo, command.groupId, command.assigningTabId, command.creatingGroup);
@@ -680,7 +722,7 @@ function App() {
 
   return <main className={isController ? "controller-shell" : menuOpen ? "group-host expanded" : "group-host"}>
     <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" onMouseDown={startHostDrag}>
-      <div className="group-menu"><button className="group-name" title={error ?? undefined} onClick={toggleGroupMenu}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
+      <div className="group-menu"><button className="group-name" title={error ?? undefined} onClick={openNativeGroupMenu}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
       <div className="tabs" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event)}>{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event, tab.id)}><button draggable className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onDragStart={(event) => beginTabDrag(event, tab.id)} onDragEnd={() => endTabDrag({ groupId: group.id, tabId: tab.id })} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : `${tab.name}（ドラッグで並べ替え・移動）`}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" draggable={false} aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>

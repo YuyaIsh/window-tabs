@@ -15,6 +15,13 @@ struct TrayPreset {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct GroupMenuItem {
+    id: String,
+    label: String,
+    enabled: bool,
+}
+
 fn tray_menu(app: &tauri::AppHandle, presets: &[TrayPreset]) -> tauri::Result<Menu<tauri::Wry>> {
     let new_group = MenuItem::with_id(app, "new-group", "新しいグループ", true, None::<&str>)?;
     let manager = MenuItem::with_id(app, "presets", "プリセットを管理…", true, None::<&str>)?;
@@ -572,6 +579,7 @@ fn main() {
             open_group_host,
             close_group_host,
             raise_group_host,
+            show_group_menu,
             set_group_host_expanded,
             set_tray_presets
         ])
@@ -611,6 +619,11 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
     .always_on_top(false)
     .skip_taskbar(true)
     .visible(true)
+    .on_menu_event(|window, event| {
+        let _ = window
+            .app_handle()
+            .emit("group-menu-action", event.id().as_ref());
+    })
     .build()
     .map_err(|error| error.to_string())?;
     Ok(())
@@ -656,6 +669,28 @@ fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+fn show_group_menu(
+    app: tauri::AppHandle,
+    group_id: String,
+    items: Vec<GroupMenuItem>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(&format!("group-{group_id}"))
+        .ok_or_else(|| "group host is unavailable".to_string())?;
+    let menu_items = items
+        .iter()
+        .map(|item| MenuItem::with_id(&app, &item.id, &item.label, item.enabled, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    let references = menu_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect::<Vec<_>>();
+    let menu = Menu::with_items(&app, &references).map_err(|error| error.to_string())?;
+    window.popup_menu(&menu).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
