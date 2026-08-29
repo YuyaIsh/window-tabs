@@ -572,6 +572,7 @@ fn main() {
             open_group_host,
             close_group_host,
             raise_group_host,
+            set_group_host_expanded,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -655,4 +656,26 @@ fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+fn set_group_host_expanded(
+    app: tauri::AppHandle,
+    group_id: String,
+    expanded: bool,
+) -> Result<(), String> {
+    let label = format!("group-{group_id}");
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| "group host is unavailable".to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let height = ((if expanded { 640.0 } else { 48.0 }) * scale).round() as u32;
+    window
+        .set_resizable(true)
+        .map_err(|error| error.to_string())?;
+    let resize_result = window.set_size(tauri::PhysicalSize::new(size.width, height));
+    let lock_result = window.set_resizable(false);
+    resize_result.map_err(|error| error.to_string())?;
+    lock_result.map_err(|error| error.to_string())
 }

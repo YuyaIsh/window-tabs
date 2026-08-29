@@ -12,6 +12,7 @@ export interface WindowBackend {
   openGroupHost(groupId: string): Promise<void>;
   closeGroupHost(groupId: string): Promise<void>;
   raiseGroupHost(groupId: string): Promise<void>;
+  setGroupHostExpanded(groupId: string, expanded: boolean): Promise<void>;
   setTrayPresets(presets: Array<{ id: string; name: string }>): Promise<void>;
 }
 
@@ -28,5 +29,6 @@ export const windowBackend: WindowBackend = {
   openGroupHost: (groupId) => invoke("open_group_host", { groupId }),
   closeGroupHost: (groupId) => invoke("close_group_host", { groupId }),
   raiseGroupHost: (groupId) => invoke("raise_group_host", { groupId }),
+  setGroupHostExpanded: (groupId, expanded) => invoke("set_group_host_expanded", { groupId, expanded }),
   setTrayPresets: (presets) => invoke("set_tray_presets", { presets }),
 };

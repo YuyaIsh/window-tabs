@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { newGroup, selectTab, ungroupWindow } from "./core/groups";
-import { calculateTabBarFrame, TAB_BAR_LOGICAL_HEIGHT } from "./core/geometry";
+import { calculateTabBarFrame, fitFrameToWorkArea, TAB_BAR_LOGICAL_HEIGHT } from "./core/geometry";
 import { applyNativeDrop, applyWorkspaceCommand } from "./core/controller";
 import { reconnectGroupExcluding } from "./core/matching";
 import { diagnostics, recordDiagnostic } from "./core/diagnostics";
@@ -26,6 +26,7 @@ const isController = ownsUpdater(hostGroupId);
 // the host height is converted with the monitor scale factor before it is set.
 const OVERLAY_HEIGHT = 640;
 const RELEASES_URL = "https://github.com/YuyaIsh/window-tabs/releases";
+type TabDragSession = { groupId: string; tabId: string };
 type ControllerCommand =
   | { type: "open-picker"; groupId?: string; creatingGroup?: boolean }
   | { type: "open-preset-manager" }
@@ -70,6 +71,7 @@ function App() {
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
   const [menuOpen, setMenuOpen] = useState(false);
   const [nativeDragId, setNativeDragId] = useState<string | null>(null);
+  const [tabDrag, setTabDrag] = useState<TabDragSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pendingFrameMutations = useRef(new Map<string, number>());
   const settledFrameTimers = useRef(new Map<string, number>());
@@ -86,6 +88,7 @@ function App() {
   const suppressWorkspaceBroadcast = useRef(false);
   const hostedGroupIds = useRef(new Set<string>());
   const controllerCommandHandler = useRef<(command: ControllerCommand) => void>();
+  const tabDropHandled = useRef(false);
   const updater = useRef(isController ? new UpdateController() : null);
   // The controller never renders a group bar. Every group is represented by
   // its own `?group=<id>` native host, independently of activeGroupId.
@@ -140,6 +143,36 @@ function App() {
   const startHostDrag = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !(event.target instanceof HTMLElement) || event.target.closest("button, [draggable='true']")) return;
     void getCurrentWindow().startDragging().catch(() => undefined);
+  };
+  const beginTabDrag = (event: DragEvent<HTMLButtonElement>, tabId: string) => {
+    if (!group) return;
+    const session = { groupId: group.id, tabId };
+    tabDropHandled.current = false;
+    setTabDrag(session);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-window-tabs-tab", JSON.stringify(session));
+    void emit("tab-drag-start", session).catch(() => undefined);
+  };
+  const completeTabDrop = (event: DragEvent<HTMLElement>, destinationTabId?: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!group || !tabDrag) return;
+    tabDropHandled.current = true;
+    if (tabDrag.groupId === group.id) {
+      if (destinationTabId && destinationTabId !== tabDrag.tabId) sendCommand({ type: "reorder-tab", groupId: group.id, sourceTabId: tabDrag.tabId, destinationTabId });
+    } else {
+      sendCommand({ type: "move-tab", groupId: tabDrag.groupId, tabId: tabDrag.tabId, destinationGroupId: group.id });
+    }
+    setTabDrag(null);
+    void emit("tab-drag-complete").catch(() => undefined);
+  };
+  const endTabDrag = (session: TabDragSession) => {
+    window.setTimeout(() => {
+      if (!tabDropHandled.current) sendCommand({ type: "release-tab", groupId: session.groupId, tabId: session.tabId });
+      tabDropHandled.current = false;
+      setTabDrag(null);
+      void emit("tab-drag-end").catch(() => undefined);
+    }, 150);
   };
   const checkForUpdates = (manual: boolean) => {
     if (!isController || !updater.current) return;
@@ -244,14 +277,11 @@ function App() {
     const overlayOpen = picker || presetManager || diagnosticsOpen || updateOpen;
     if (overlayOpen) { void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT)); return; }
     if (menuOpen && group) {
-      void (async () => {
-        const appWindow = getCurrentWindow();
-        const [size, scale] = await Promise.all([appWindow.innerSize(), appWindow.scaleFactor()]);
-        await appWindow.setSize(new PhysicalSize(size.width, Math.round(OVERLAY_HEIGHT * scale)));
-      })().catch(() => undefined);
+      void windowBackend.setGroupHostExpanded(group.id, true).catch(() => undefined);
       return;
     }
     if (group) {
+      void windowBackend.setGroupHostExpanded(group.id, false).catch(() => undefined);
       const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
       if (display) { void pinBarTo(denormalizeFrame(group.frame, display), display); return; }
     }
@@ -260,6 +290,12 @@ function App() {
     if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
     void getCurrentWindow().setSize(new LogicalSize(720, TAB_BAR_LOGICAL_HEIGHT));
   }, [group, picker, presetManager, diagnosticsOpen, updateOpen, menuOpen, windows, displays]);
+  useEffect(() => {
+    const started = listen<TabDragSession>("tab-drag-start", ({ payload }) => setTabDrag(payload));
+    const completed = listen("tab-drag-complete", () => { tabDropHandled.current = true; setTabDrag(null); });
+    const ended = listen("tab-drag-end", () => setTabDrag(null));
+    return () => { for (const unlisten of [started, completed, ended]) void unlisten.then((dispose) => dispose()); };
+  }, []);
   useEffect(() => {
     if (!hostGroupId || !group) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
@@ -590,8 +626,8 @@ function App() {
         const frame = { x: command.x, y: command.contentY, width: Math.max(1, Math.round(target.frame.width * (oldDisplay?.workArea.width ?? 1))), height: Math.max(1, Math.round(target.frame.height * (oldDisplay?.workArea.height ?? 1))) };
         const display = displayForFrame(frame, displays);
         if (!display) break;
-        const nextFrame = normalizeFrame(frame, display);
-        const destination = denormalizeFrame(nextFrame, display);
+        const destination = fitFrameToWorkArea(frame, display);
+        const nextFrame = normalizeFrame(destination, display);
         for (const tab of target.tabs) if (tab.runtimeWindowId) void setFrame(tab.runtimeWindowId, destination);
         setWorkspace((state) => ({ ...state, groups: state.groups.map((item) => item.id === target.id ? { ...item, displayId: display.id, frame: nextFrame } : item) }));
         break;
@@ -622,9 +658,9 @@ function App() {
       <div className="group-menu"><button className="group-name" onClick={() => setMenuOpen((value) => !value)}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
         {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
       </div>
-      <div className="tabs">{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap"><button className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : tab.name}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
+      <div className="tabs" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event)}>{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event, tab.id)}><button draggable className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onDragStart={(event) => beginTabDrag(event, tab.id)} onDragEnd={() => endTabDrag({ groupId: group.id, tabId: tab.id })} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : `${tab.name}（ドラッグで並べ替え・移動）`}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" draggable={false} aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
       <button className="add" aria-label={commandGroup ? `${commandGroup.name} にウィンドウを追加` : "ウィンドウを追加"} aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={openWindowPicker}>＋</button>
-      {group && <div className="drag-handle" role="button" aria-label="グループ全体を移動" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
+      {group && <div className="drag-handle" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
     </section>
     {isController && <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>}
     {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加"><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : pickerContext.groupId ? `${workspace.groups.find((item) => item.id === pickerContext.groupId)?.name ?? "グループ"}へ追加` : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}
