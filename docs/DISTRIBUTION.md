@@ -54,7 +54,7 @@ The release workflow injects the public key into the build-only config without l
 
 `.github/workflows/ci.yml` runs on Windows for PRs and `main`: frozen pnpm install, frontend tests/build, release-config checks, tracked-private-key scan, Rust fmt/clippy/test, and unsigned NSIS smoke. It has read-only repository permissions and no signing secrets.
 
-`.github/workflows/release.yml` runs on pushes to `main`, which includes the normal pull-request merge path. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. Before building, it rejects a version whose `v<version>` tag already exists. The Tauri action then creates that tag from the built application version, uploads the NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, and publishes the GitHub Release automatically. `updaterJsonPreferNsis` prevents MSI selection. The workflow is not triggered by tag pushes, so the tag created by the action cannot recursively start another release.
+`.github/workflows/release.yml` runs on pushes to `main`, which includes the normal pull-request merge path. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. Before building, it rejects a version whose `v<version>` tag already exists. After all preflight checks, the workflow atomically creates that version-derived tag at the current commit through the GitHub API; the Tauri action receives `tagName: v__VERSION__`, creates the GitHub Release, and uploads the NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`. `updaterJsonPreferNsis` prevents MSI selection. The workflow is not triggered by tag pushes, so the generated tag cannot recursively start another release. No `git tag`, `git push`, PAT, or manual Release operation is used.
 
 ## Release procedure
 
@@ -70,7 +70,7 @@ The release workflow injects the public key into the build-only config without l
 2. Complete review and CI, including the release-impacting-change version-bump check.
 3. Merge the PR into `main`.
 4. The Release workflow automatically runs its preflight checks, builds and signs the Windows x86_64 NSIS bundle, and verifies that `v<version>` is unused.
-5. Tauri action automatically creates `v<version>`, uploads the setup/updater/signature/`latest.json` assets, and publishes `window-tabs v<version>`.
+5. The workflow atomically creates `v<version>` at the merged commit; Tauri action then creates and publishes `window-tabs v<version>` and uploads the setup/updater/signature/`latest.json` assets.
 6. Verify unauthenticated setup/latest.json downloads and perform the clean-install or N→N+1 smoke appropriate for the release.
 
 No normal release step requires manually creating or pushing a tag, creating a GitHub Release, or publishing a draft Release. The workflow stops with a clear error if the application version already has a tag.
