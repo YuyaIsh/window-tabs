@@ -580,7 +580,6 @@ fn main() {
             close_group_host,
             raise_group_host,
             show_group_menu,
-            set_group_host_expanded,
             set_tray_presets
         ])
         .run(tauri::generate_context!())
@@ -691,57 +690,4 @@ fn show_group_menu(
         .collect::<Vec<_>>();
     let menu = Menu::with_items(&app, &references).map_err(|error| error.to_string())?;
     window.popup_menu(&menu).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn set_group_host_expanded(
-    app: tauri::AppHandle,
-    group_id: String,
-    expanded: bool,
-) -> Result<(), String> {
-    let label = format!("group-{group_id}");
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| "group host is unavailable".to_string())?;
-    let size = window.inner_size().map_err(|error| error.to_string())?;
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let height = ((if expanded { 640.0 } else { 48.0 }) * scale).round() as u32;
-    window
-        .set_resizable(true)
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::c_void;
-        use windows::Win32::{
-            Foundation::HWND,
-            UI::WindowsAndMessaging::{
-                GetAncestor, SetWindowPos, GA_ROOT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-            },
-        };
-        let raw = window.hwnd().map_err(|error| error.to_string())?;
-        let hwnd = HWND(raw.0 as *mut c_void);
-        unsafe {
-            let root = GetAncestor(hwnd, GA_ROOT);
-            SetWindowPos(
-                root,
-                HWND::default(),
-                0,
-                0,
-                size.width as i32,
-                height as i32,
-                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
-            )
-            .map_err(|error| error.to_string())?;
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    window
-        .set_size(tauri::PhysicalSize::new(size.width, height))
-        .map_err(|error| error.to_string())?;
-    if !expanded {
-        window
-            .set_resizable(false)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
 }
