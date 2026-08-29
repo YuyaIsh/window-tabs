@@ -90,7 +90,7 @@ jobs:
                 tag_name: tag,
                 name: `window-tabs ${process.env.RELEASE_VERSION}`,
                 body: 'Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.',
-                draft: false,
+                draft: true,
                 prerelease: false,
               });
               core.setOutput('release_id', release.data.id.toString());
@@ -118,3 +118,17 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Publish release after assets are uploaded
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number('${{ steps.reserve-release.outputs.release_id }}'),
+              draft: false,
+              prerelease: false,
+            });
+            core.info('Published the release after the signed assets were uploaded.');
