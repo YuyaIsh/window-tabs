@@ -243,6 +243,14 @@ function App() {
   useEffect(() => {
     const overlayOpen = picker || presetManager || diagnosticsOpen || updateOpen;
     if (overlayOpen) { void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT)); return; }
+    if (menuOpen && group) {
+      void (async () => {
+        const appWindow = getCurrentWindow();
+        const [size, scale] = await Promise.all([appWindow.innerSize(), appWindow.scaleFactor()]);
+        await appWindow.setSize(new PhysicalSize(size.width, Math.round(OVERLAY_HEIGHT * scale)));
+      })().catch(() => undefined);
+      return;
+    }
     if (group) {
       const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
       if (display) { void pinBarTo(denormalizeFrame(group.frame, display), display); return; }
@@ -251,7 +259,7 @@ function App() {
     const windowInfo = windows.find((item) => item.id === connected);
     if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
     void getCurrentWindow().setSize(new LogicalSize(720, TAB_BAR_LOGICAL_HEIGHT));
-  }, [group, picker, presetManager, diagnosticsOpen, updateOpen, windows, displays]);
+  }, [group, picker, presetManager, diagnosticsOpen, updateOpen, menuOpen, windows, displays]);
   useEffect(() => {
     if (!hostGroupId || !group) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
