@@ -645,7 +645,6 @@ fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
         .ok_or_else(|| "group host is unavailable".to_string())?;
     #[cfg(target_os = "windows")]
     {
-        use std::ffi::c_void;
         use windows::Win32::{
             Foundation::HWND,
             UI::WindowsAndMessaging::{
@@ -653,7 +652,7 @@ fn raise_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), Strin
             },
         };
         let raw = window.hwnd().map_err(|error| error.to_string())?;
-        let hwnd = HWND(raw.0 as *mut c_void);
+        let hwnd = HWND(raw.0);
         unsafe {
             SetWindowPos(
                 hwnd,
