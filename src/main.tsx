@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
@@ -143,6 +143,19 @@ function App() {
   const startHostDrag = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !(event.target instanceof HTMLElement) || event.target.closest("button, [draggable='true']")) return;
     void getCurrentWindow().startDragging().catch(() => undefined);
+  };
+  const startGroupHandleDrag = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.button === 0) void getCurrentWindow().startDragging().catch(() => undefined);
+  };
+  const moveGroupHandleByKey = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!group || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const delta = event.shiftKey ? 50 : 10;
+    void getCurrentWindow().outerPosition().then((position) => {
+      const x = position.x + (event.key === "ArrowLeft" ? -delta : event.key === "ArrowRight" ? delta : 0);
+      const y = position.y + (event.key === "ArrowUp" ? -delta : event.key === "ArrowDown" ? delta : 0);
+      sendCommand({ type: "host-moved", groupId: group.id, x, contentY: y + hostPhysicalHeight.current });
+    }).catch(() => undefined);
   };
   const beginTabDrag = (event: DragEvent<HTMLButtonElement>, tabId: string) => {
     if (!group) return;
@@ -297,10 +310,10 @@ function App() {
     return () => { for (const unlisten of [started, completed, ended]) void unlisten.then((dispose) => dispose()); };
   }, []);
   useEffect(() => {
-    if (!hostGroupId || !group) return;
+    if (!hostGroupId || !group || menuOpen) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
     if (display) void pinBarTo(denormalizeFrame(group.frame, display), display);
-  }, [group?.id, hostGroupId, windows]);
+  }, [group?.id, hostGroupId, windows, menuOpen]);
   useEffect(() => {
     if (!isController) return;
     const primary = displays.find((display) => display.primary);
@@ -660,7 +673,7 @@ function App() {
       </div>
       <div className="tabs" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event)}>{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event, tab.id)}><button draggable className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onDragStart={(event) => beginTabDrag(event, tab.id)} onDragEnd={() => endTabDrag({ groupId: group.id, tabId: tab.id })} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : `${tab.name}（ドラッグで並べ替え・移動）`}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" draggable={false} aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
       <button className="add" aria-label={commandGroup ? `${commandGroup.name} にウィンドウを追加` : "ウィンドウを追加"} aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={openWindowPicker}>＋</button>
-      {group && <div className="drag-handle" title="ドラッグしてグループ全体を移動" onMouseDown={startHostDrag}><span /><span /><span /></div>}
+      {group && <button className="drag-handle" aria-label="グループ全体を移動" title="ドラッグ、または矢印キーでグループ全体を移動" onMouseDown={startGroupHandleDrag} onKeyDown={moveGroupHandleByKey}><span /><span /><span /></button>}
     </section>
     {isController && <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>}
     {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加"><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : pickerContext.groupId ? `${workspace.groups.find((item) => item.id === pickerContext.groupId)?.name ?? "グループ"}へ追加` : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}

@@ -674,8 +674,13 @@ fn set_group_host_expanded(
     window
         .set_resizable(true)
         .map_err(|error| error.to_string())?;
-    let resize_result = window.set_size(tauri::PhysicalSize::new(size.width, height));
-    let lock_result = window.set_resizable(false);
-    resize_result.map_err(|error| error.to_string())?;
-    lock_result.map_err(|error| error.to_string())
+    window
+        .set_size(tauri::PhysicalSize::new(size.width, height))
+        .map_err(|error| error.to_string())?;
+    if !expanded {
+        window
+            .set_resizable(false)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
