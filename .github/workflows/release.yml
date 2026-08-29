@@ -60,6 +60,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const tag = `v${process.env.RELEASE_VERSION}`;
+            const releaseName = `window-tabs ${process.env.RELEASE_VERSION}`;
+            const releaseBody = 'Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.\n\n<!-- window-tabs automated release -->';
             try {
               await github.rest.git.createRef({
                 owner: context.repo.owner,
@@ -88,19 +90,32 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 tag_name: tag,
-                name: `window-tabs ${process.env.RELEASE_VERSION}`,
-                body: 'Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.',
+                name: releaseName,
+                body: releaseBody,
                 draft: true,
                 prerelease: false,
               });
               core.setOutput('release_id', release.data.id.toString());
               core.info(`Created Release for ${tag}.`);
             } catch (error) {
-              if (error.status === 422) {
-                core.setFailed(`${tag} already exists with a Release. Bump the application version before releasing.`);
+              if (error.status !== 422) throw error;
+
+              const existingRelease = (await github.paginate(github.rest.repos.listReleases, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              })).find((release) => release.tag_name === tag);
+              if (
+                existingRelease?.draft === true &&
+                existingRelease.name === releaseName &&
+                existingRelease.body === releaseBody &&
+                existingRelease.assets.length === 0
+              ) {
+                core.setOutput('release_id', existingRelease.id.toString());
+                core.warning(`${tag} has an empty automated draft Release for this commit; resuming the incomplete release attempt.`);
                 return;
               }
-              throw error;
+              core.setFailed(`${tag} already exists with a Release. Bump the application version before releasing.`);
             }
       # action-v1.0.0. Keep the full immutable revision for reviewable releases.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
@@ -112,7 +127,10 @@ jobs:
           releaseId: ${{ steps.reserve-release.outputs.release_id }}
           tagName: v__VERSION__
           releaseName: window-tabs v__VERSION__
-          releaseBody: Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.
+          releaseBody: |
+            Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.
+
+            <!-- window-tabs automated release -->
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
