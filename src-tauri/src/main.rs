@@ -674,6 +674,31 @@ fn set_group_host_expanded(
     window
         .set_resizable(true)
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+            },
+        };
+        let raw = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(raw.0 as *mut c_void);
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                size.width as i32,
+                height as i32,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
     window
         .set_size(tauri::PhysicalSize::new(size.width, height))
         .map_err(|error| error.to_string())?;
