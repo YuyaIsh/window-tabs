@@ -13,6 +13,7 @@ import { reconcileGroupHosts } from "./core/hostLifecycle";
 import { assignmentPickerContext, closedPickerContext, groupPickerContext, newGroupPickerContext, type PickerContext } from "./core/pickerContext";
 import { groupToPreset, loadPresets, resolvePresetGeometry, savePresets, upsertPreset } from "./core/presets";
 import { ownsUpdater, UpdateController, type UpdateState } from "./core/updater";
+import { shouldReleaseDraggedTab } from "./core/tabDrag";
 import { activeOrLatestGroup, addGroup, addWindowToGroup, assignWindowToTab, detachTab, dissolveGroup, emptyWorkspace, groupForWindow, moveTabToGroup, removeClosedWindow, selectGroup } from "./core/workspace";
 import type { DisplayInfo, Preset, TabGroup, WindowInfo } from "./core/model";
 import type { NativeWindowEvent } from "./platform-client/windowBackend";
@@ -90,6 +91,7 @@ function App() {
   const hostedGroupIds = useRef(new Set<string>());
   const controllerCommandHandler = useRef<(command: ControllerCommand) => void>();
   const tabDropHandled = useRef(false);
+  const tabDragCancelled = useRef(false);
   const updater = useRef(isController ? new UpdateController() : null);
   // The controller never renders a group bar. Every group is represented by
   // its own `?group=<id>` native host, independently of activeGroupId.
@@ -162,6 +164,7 @@ function App() {
     if (!group) return;
     const session = { groupId: group.id, tabId };
     tabDropHandled.current = false;
+    tabDragCancelled.current = false;
     setTabDrag(session);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("application/x-window-tabs-tab", JSON.stringify(session));
@@ -182,8 +185,9 @@ function App() {
   };
   const endTabDrag = (session: TabDragSession) => {
     window.setTimeout(() => {
-      if (!tabDropHandled.current) sendCommand({ type: "release-tab", groupId: session.groupId, tabId: session.tabId });
+      if (shouldReleaseDraggedTab(tabDropHandled.current, tabDragCancelled.current)) sendCommand({ type: "release-tab", groupId: session.groupId, tabId: session.tabId });
       tabDropHandled.current = false;
+      tabDragCancelled.current = false;
       setTabDrag(null);
       void emit("tab-drag-end").catch(() => undefined);
     }, 150);
@@ -588,6 +592,11 @@ function App() {
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && tabDrag) {
+        tabDragCancelled.current = true;
+        setTabDrag(null);
+        void emit("tab-drag-end").catch(() => undefined);
+      }
       if (event.key === "F8" || (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "a")) {
         event.preventDefault();
         openWindowPicker();
@@ -602,7 +611,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => { window.removeEventListener("keydown", onKeyDown, true); };
-  }, [workspace]);
+  }, [workspace, tabDrag]);
   const renameSelectedTab = (groupId = group?.id, tabId = group?.activeTabId) => {
     if (!groupId || !tabId) return;
     if (!isController) { sendCommand({ type: "rename-tab", groupId, tabId }); return; }
