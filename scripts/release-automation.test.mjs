@@ -66,4 +66,16 @@ describe("release automation helpers", () => {
     const multilineDiff = "@@ -1,3 +1,3 @@\n const message = `\n-/* old\n+/* new\n `;";
     expect(hasExecutableDiff(multilineDiff, "src/core/example.ts", { before: multilineBefore, after: multilineAfter })).toBe(true);
   });
+
+  it("does not treat hash-prefixed data inside TOML or YAML multiline values as comments", () => {
+    const tomlBefore = 'message = """\n# old\n"""\n';
+    const tomlAfter = 'message = """\n# new\n"""\n';
+    const tomlDiff = "@@ -1,3 +1,3 @@\n message = \"\"\"\n-# old\n+# new\n \"\"\"";
+    expect(hasExecutableDiff(tomlDiff, "src-tauri/Cargo.toml", { before: tomlBefore, after: tomlAfter })).toBe(true);
+
+    const yamlBefore = "message: |\n  # old\n";
+    const yamlAfter = "message: |\n  # new\n";
+    const yamlDiff = "@@ -1,2 +1,2 @@\n message: |\n-  # old\n+  # new";
+    expect(hasExecutableDiff(yamlDiff, "pnpm-lock.yaml", { before: yamlBefore, after: yamlAfter })).toBe(true);
+  });
 });

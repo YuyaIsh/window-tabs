@@ -44,16 +44,55 @@ function supportsSlashComments(filePath) {
   return /\.(?:[cm]?[jt]sx?|rs)$/i.test(filePath);
 }
 
+function supportsHashComments(filePath) {
+  return /\.(?:toml|ya?ml)$/i.test(filePath);
+}
+
+function isYamlFile(filePath) {
+  return /\.ya?ml$/i.test(filePath);
+}
+
+function yamlBlockScalarHeader(line) {
+  return /(?:^|:\s*|-\s+)[|>](?:[1-9])?[+-]?(?:\s+#.*)?$/.test(line.trim());
+}
+
 function commentOnlyLineNumbers(source, filePath) {
   const markers = blockCommentMarkers(filePath);
   const commentOnlyLines = new Set();
-  const supportsHashComments = /\.(?:toml|ya?ml)$/i.test(filePath);
+  const hashComments = supportsHashComments(filePath);
   const supportsSlashCommentsForFile = supportsSlashComments(filePath);
   if (!markers) {
+    let tomlMultilineDelimiter = null;
+    let yamlBlockIndent = null;
     source.split(/\r?\n/).forEach((line, index) => {
       const trimmed = line.trim();
-      if ((supportsHashComments && trimmed.startsWith("#")) || (supportsSlashCommentsForFile && trimmed.startsWith("//"))) {
+      if (tomlMultilineDelimiter) {
+        if (line.includes(tomlMultilineDelimiter)) tomlMultilineDelimiter = null;
+        return;
+      }
+      const indentation = line.match(/^\s*/)[0].length;
+      if (yamlBlockIndent !== null) {
+        if (trimmed === "" || indentation > yamlBlockIndent) return;
+        yamlBlockIndent = null;
+      }
+      if (isYamlFile(filePath) && yamlBlockIndent === null && yamlBlockScalarHeader(line)) {
+        yamlBlockIndent = indentation;
+        return;
+      }
+      if (hashComments && trimmed.startsWith("#")) {
         commentOnlyLines.add(index + 1);
+        return;
+      }
+      if (supportsSlashCommentsForFile && trimmed.startsWith("//")) {
+        commentOnlyLines.add(index + 1);
+        return;
+      }
+      if (hashComments && /\.toml$/i.test(filePath)) {
+        const tripleQuote = [line.indexOf('"""'), line.indexOf("'''")].filter((position) => position >= 0).sort((left, right) => left - right)[0];
+        if (tripleQuote !== undefined) {
+          const delimiter = line.slice(tripleQuote, tripleQuote + 3);
+          if (line.indexOf(delimiter, tripleQuote + 3) === -1) tomlMultilineDelimiter = delimiter;
+        }
       }
     });
     return commentOnlyLines;
