@@ -84,6 +84,7 @@ jobs:
             const tag = `v${process.env.RELEASE_VERSION}`;
             const releaseName = `window-tabs ${process.env.RELEASE_VERSION}`;
             const releaseBody = 'Install with the x64 NSIS setup.exe. Updater metadata and signatures are attached.\n\n<!-- window-tabs automated release -->';
+            const { expectedReleaseAssets } = require(`${process.env.GITHUB_WORKSPACE}/scripts/release-assets.cjs`);
             try {
               await github.rest.git.createRef({
                 owner: context.repo.owner,
@@ -140,13 +141,7 @@ jobs:
                 per_page: 100,
               });
               const assetNames = new Set(assets.map((asset) => asset.name || asset.label));
-              const expectedAssets = [
-                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe`,
-                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe.sig`,
-                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip`,
-                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip.sig`,
-                'latest.json',
-              ];
+              const expectedAssets = expectedReleaseAssets(process.env.RELEASE_VERSION);
               const hasCompleteAssets = expectedAssets.every((assetName) => assetNames.has(assetName));
 
               if (existingRelease.draft) {
@@ -199,20 +194,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const { expectedReleaseAssets } = require(`${process.env.GITHUB_WORKSPACE}/scripts/release-assets.cjs`);
             const release = await github.rest.repos.getRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: Number('${{ steps.reserve-release.outputs.release_id }}'),
             });
-            // The pinned action emits both the NSIS installer and updater zip
-            // artifacts; updaterJsonPreferNsis selects the latter for latest.json.
-            const expectedAssets = [
-              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe`,
-              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe.sig`,
-              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip`,
-              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip.sig`,
-              'latest.json',
-            ];
+            const expectedAssets = expectedReleaseAssets(process.env.RELEASE_VERSION);
             const assetNames = new Set((await github.paginate(github.rest.repos.listReleaseAssets, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -228,11 +216,34 @@ jobs:
               core.info(`Release ${release.data.tag_name} is already published with all expected assets.`);
               return;
             }
+            const { pathToFileURL } = require('node:url');
+            const { latestPublishedVersion, shouldPublishAsLatest } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/check-release-version.mjs`).href
+            );
+            const publishedReleases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            let latestVersion;
+            try {
+              latestVersion = latestPublishedVersion(publishedReleases);
+            } catch (error) {
+              core.setFailed(error.message);
+              return;
+            }
+            if (latestVersion && !shouldPublishAsLatest(process.env.RELEASE_VERSION, latestVersion)) {
+              core.setFailed(
+                `refusing to publish ${release.data.tag_name}; published SemVer ${latestVersion} is not older than ${release.data.tag_name}.`,
+              );
+              return;
+            }
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.data.id,
               draft: false,
               prerelease: false,
+              make_latest: 'true',
             });
             core.info('Published the release after the signed assets were uploaded.');

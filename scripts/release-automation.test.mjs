@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { compareSemVer, releaseTagForVersion } from "./check-release-version.mjs";
+import { compareSemVer, latestPublishedVersion, releaseTagForVersion, shouldPublishAsLatest } from "./check-release-version.mjs";
 import { hasExecutableDiff, isReleaseImpactingPath, shouldReleaseForMainPush } from "./check-version-bump.mjs";
+import { expectedReleaseAssets } from "./release-assets.cjs";
 
 describe("release automation helpers", () => {
   it("derives the tag from a valid application version", () => {
@@ -17,6 +18,30 @@ describe("release automation helpers", () => {
     expect(compareSemVer("0.1.0", "0.1.0-rc.1")).toBeGreaterThan(0);
     expect(compareSemVer("0.1.0-alpha.1", "0.1.0-alpha.2")).toBeLessThan(0);
     expect(compareSemVer("0.1.0+build.2", "0.1.0+build.1")).toBe(0);
+  });
+
+  it("does not let an older rerun take over Latest Release", () => {
+    expect(shouldPublishAsLatest("0.1.1", null)).toBe(true);
+    expect(shouldPublishAsLatest("0.1.1", "0.1.2")).toBe(false);
+    expect(shouldPublishAsLatest("0.1.3", "0.1.2")).toBe(true);
+    expect(shouldPublishAsLatest("0.1.2", "0.1.2")).toBe(false);
+  });
+
+  it("compares against the highest published SemVer regardless of release order", () => {
+    expect(latestPublishedVersion([
+      { tag_name: "v0.1.2", draft: false, prerelease: false, created_at: "2026-08-01T00:00:00Z" },
+      { tag_name: "v0.1.1", draft: false, prerelease: false, created_at: "2026-08-02T00:00:00Z" },
+      { tag_name: "v0.9.0", draft: true, prerelease: false },
+      { tag_name: "v1.0.0-rc.1", draft: false, prerelease: true },
+    ])).toBe("0.1.2");
+  });
+
+  it("matches the observed Tauri v0.1.0 Release asset set", () => {
+    expect(expectedReleaseAssets("0.1.0")).toEqual([
+      "window-tabs_0.1.0_x64-setup.exe",
+      "window-tabs_0.1.0_x64-setup.exe.sig",
+      "latest.json",
+    ]);
   });
 
   it("skips non-release main pushes and rejects non-increasing releases", () => {

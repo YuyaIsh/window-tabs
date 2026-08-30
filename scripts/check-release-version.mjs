@@ -63,6 +63,23 @@ export function compareSemVer(left, right) {
   return 0;
 }
 
+export function shouldPublishAsLatest(currentVersion, latestVersion) {
+  if (latestVersion === null || latestVersion === undefined) return true;
+  return compareSemVer(currentVersion, latestVersion) > 0;
+}
+
+export function latestPublishedVersion(releases) {
+  let latestVersion = null;
+  for (const release of releases.filter((candidate) => !candidate.draft && !candidate.prerelease)) {
+    const tag = release?.tag_name;
+    const version = typeof tag === "string" && tag.startsWith("v") ? tag.slice(1) : null;
+    if (!version) throw new Error(`invalid published release tag: ${tag ?? "<missing>"}`);
+    parseSemVer(version);
+    if (latestVersion === null || compareSemVer(version, latestVersion) > 0) latestVersion = version;
+  }
+  return latestVersion;
+}
+
 export function readApplicationVersion() {
   const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   return packageJson.version;
