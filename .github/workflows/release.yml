@@ -170,6 +170,8 @@ jobs:
               core.setFailed(`${tag} already has an incomplete published Release. It will not be modified; bump the application version before releasing.`);
             }
       # action-v1.0.0. Keep the full immutable revision for reviewable releases.
+      # With releaseId set, the action uploads to the reserved draft and skips
+      # its own release creation; publication remains explicit below.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
         if: success() && steps.reserve-release.outputs.resume_mode != 'publish' && steps.reserve-release.outputs.resume_mode != 'published'
         env:
@@ -202,6 +204,8 @@ jobs:
               repo: context.repo.repo,
               release_id: Number('${{ steps.reserve-release.outputs.release_id }}'),
             });
+            // The pinned action emits both the NSIS installer and updater zip
+            // artifacts; updaterJsonPreferNsis selects the latter for latest.json.
             const expectedAssets = [
               `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe`,
               `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe.sig`,
