@@ -49,9 +49,11 @@ function commentOnlyLineNumbers(source, filePath) {
   source.split(/\r?\n/).forEach((line, index) => {
     let cursor = 0;
     let hasCode = false;
+    let hasBlockComment = false;
 
     while (cursor < line.length) {
       if (inBlockComment) {
+        hasBlockComment = true;
         const end = line.indexOf(markers.end, cursor);
         if (end === -1) {
           cursor = line.length;
@@ -68,13 +70,14 @@ function commentOnlyLineNumbers(source, filePath) {
         break;
       }
       if (line.slice(cursor, start).trim()) hasCode = true;
+      hasBlockComment = true;
       inBlockComment = true;
       cursor = start + markers.start.length;
     }
 
     const trimmed = line.trim();
     const singleLineComment = /^(?:\/\/|#)/.test(trimmed) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
-    if (!hasCode && (inBlockComment || singleLineComment || markers.start === "/*" && line.trim() === "")) {
+    if (!hasCode && (hasBlockComment || singleLineComment || markers.start === "/*" && line.trim() === "")) {
       commentOnlyLines.add(index + 1);
     }
   });

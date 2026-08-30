@@ -43,5 +43,10 @@ describe("release automation helpers", () => {
     const after = "/*\nnew note\n*/\n";
     const diff = "@@ -1,3 +1,3 @@\n /*\n-old note\n+new note\n */";
     expect(hasExecutableDiff(diff, "src/styles.css", { before, after })).toBe(false);
+
+    const inlineCloseBefore = "/*\nold note */\n";
+    const inlineCloseAfter = "/*\nnew note */\n";
+    const inlineCloseDiff = "@@ -1,2 +1,2 @@\n /*\n-old note */\n+new note */";
+    expect(hasExecutableDiff(inlineCloseDiff, "src/styles.css", { before: inlineCloseBefore, after: inlineCloseAfter })).toBe(false);
   });
 });
