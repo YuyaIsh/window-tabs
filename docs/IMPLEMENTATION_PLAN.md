@@ -417,6 +417,11 @@ Windows 10で日常利用できる製品回帰に加え、public GitHub Release�
 - updater artifact signing必須、private keyはrelease workflow Secretsだけに注入
 - PR CIはrelease signing secretsを扱わずunsigned NSIS smoke
 - SemVer/config/tag整合checkとtracked private-key check
+- 通常のReleaseは`main` pushだけで開始し、workflowがversionからtagとReleaseをatomic予約し、Tauri actionが同じReleaseへupdater metadataを自動upload
+- Release前に既存`v<version>` tagを検出してfail-closedに停止し、同じversionのartifactを上書きしない
+- main push gateは既存helperを再利用し、release-impacting changeがなくversionも同じpushは正常skip、release-impacting changeはbaseより新しいstable SemVerを要求し、pre-release versionはproduction channelから拒否する
+- 配布binaryに影響するPRはversion bumpをCIで要求し、docs/README/コメントのみの変更は対象外
+- 同一commitのmarked draftは再実行可能とし、complete assetならpublish-only、partial assetなら生成assetだけを再構築する。公開直前に公開済みnon-prerelease Releaseの最大SemVerとの順序を検証し、古いrerunでLatestを後退させない。公開済みReleaseは変更しない
 - public化前のfull-history secret scan
 - 詳細とrelease手順は `docs/DISTRIBUTION.md`
 

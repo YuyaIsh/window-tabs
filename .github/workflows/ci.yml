@@ -13,6 +13,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -27,6 +29,9 @@ jobs:
       - run: pnpm test
       - run: pnpm run build
       - run: pnpm run check:release
+      - name: Check version bump for release-impacting PR changes
+        if: github.event_name == 'pull_request'
+        run: pnpm run check:version-bump -- --base ${{ github.event.pull_request.base.sha }}
       - run: pnpm run check:secrets
       - run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc -- -D warnings

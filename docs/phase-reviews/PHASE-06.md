@@ -11,17 +11,17 @@ Status: **IN_REVIEW; release acceptance remains BLOCKED: RELEASE VERIFICATION**
 - Controller-only startup/manual checks with a 60-second process cooldown.
 - User-separated check, download, install actions; on Windows the updater installer owns process exit/restart, with no polling or silent update.
 - Update state/error UI, diagnostics, and Releases fallback.
-- PR CI without signing secrets and a release-only signing workflow using draft GitHub Releases.
+- PR CI without signing secrets and a main-push release-only signing workflow with automatically published GitHub Releases.
 - SemVer/config/tag checks and tracked-private-key scan.
 - D-024 through D-027 and the distribution runbook.
 
 ## Automated checks
 
-- `pnpm test` — PASS (11 files, 36 tests; updater cooldown/ownership/state/no-update/available/error/consent included).
+- `pnpm test` — PASS (13 files, 46 tests; updater cooldown/ownership/state/no-update/available/error/consent and release automation helpers included).
 - `pnpm run build` — PASS (TypeScript and Vite production build).
-- `pnpm run check:release` — PASS (SemVer/config/identity/endpoint/NSIS/capability assumptions).
+- `pnpm run check:release` — PASS for `0.1.1` (SemVer/config/identity/endpoint/NSIS/capability assumptions).
 - Release-key fail-closed check — PASS; absent public key/private key/password rejects release configuration.
-- `pnpm run check:secrets` — PASS (122 tracked/untracked non-ignored repository files).
+- `pnpm run check:secrets` — PASS (126 tracked/untracked non-ignored repository files).
 - `actionlint 1.7.12 .github/workflows/*.yml` — PASS; downloaded archive checksum verified.
 - `git diff --check` — PASS.
 - `cargo fmt --check --manifest-path src-tauri/Cargo.toml` — PASS.
@@ -42,7 +42,7 @@ Updater private key/password were not generated, displayed, or committed. The ch
 ## Distribution checks
 
 - Configuration/schema validation: PASS through Tauri build scripts, release-config check, Rust compile, and actionlint.
-- Unsigned local NSIS build: PASS using the CI config override; generated `window-tabs_0.1.0_x64-setup.exe` under the local Windows build target.
+- Unsigned local NSIS build: PASS using the CI config override; the recorded artifact was `window-tabs_0.1.0_x64-setup.exe` before the release-automation version bump.
 - Normal signed `pnpm tauri build`: NOT RUN; production signing key/public key are intentionally unavailable. The unsigned CI-equivalent bundle does not prove updater signing.
 - Signed updater artifact / `.sig` / `latest.json`: NOT RUN (signing key intentionally unavailable).
 - GitHub Actions release reproduction: NOT RUN.
@@ -81,7 +81,16 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 
 The fixes require reviewer re-review before code approval is restored.
 
-Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
+## Release automation follow-up
+
+- The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.1`.
+- `.github/workflows/release.yml` now runs on `main` pushes only. It does not run from tag pushes or require a manual dispatch/tag. The production gate accepts only stable SemVer values; pre-release versions are rejected.
+- Before Release creation, a read-only main-push gate reuses the version/change helper and skips docs/README/comment/workflow-only pushes with no newer version. Release-impacting pushes require a newer stable SemVer, and pre-release versions are rejected. `actions/github-script` then atomically creates the version-derived tag at the current commit and a new marked draft Release with `GITHUB_TOKEN`; a final automatic step verifies all expected assets, rejects a candidate that is not newer than the highest published non-prerelease SemVer, and publishes it only after Tauri asset upload succeeds. It stops with a clear error for a tag on another commit, a different or incomplete published Release, or an unrecognized Release. A same-commit marked draft retry uses publish-only when complete and rebuilds only generated assets when partial; a completed automated Release is idempotent without modifying published assets.
+- The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `releaseId`, `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow. The action builds and uploads assets for that immutable Release.
+- PR CI checks that release-impacting code/dependency changes increase the application version and use a stable SemVer; equal, lower, or pre-release versions are rejected. Documentation, README, and comment-only changes do not require a bump.
+- The release workflow uses a non-canceling concurrency group so queued `main` releases re-check the tag after the earlier release completes.
+
+Current unresolved P0/P1/P2: **0** after the latest review fixes, pending reviewer re-review.
 
 ## Deferred
 
@@ -91,6 +100,6 @@ Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
 
 ## Approval
 
-- Code review: **IN_REVIEW** (the four P2 fixes are awaiting reviewer confirmation).
+- Code review: **IN_REVIEW** (the latest review fixes are awaiting reviewer confirmation).
 - Release acceptance: BLOCKED — real public release and N→N+1 smoke are not run.
 - Phase 6: **BLOCKED: RELEASE VERIFICATION**.

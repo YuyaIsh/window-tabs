@@ -54,21 +54,32 @@ The release workflow injects the public key into the build-only config without l
 
 `.github/workflows/ci.yml` runs on Windows for PRs and `main`: frozen pnpm install, frontend tests/build, release-config checks, tracked-private-key scan, Rust fmt/clippy/test, and unsigned NSIS smoke. It has read-only repository permissions and no signing secrets.
 
-`.github/workflows/release.yml` runs only for SemVer tags or an explicit existing-tag dispatch. Its release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. It produces NSIS setup, the `.nsis.zip` updater artifact, `.sig`, and `latest.json`, then creates a draft GitHub Release. `updaterJsonPreferNsis` prevents MSI selection.
+`.github/workflows/release.yml` runs on pushes to `main`, which includes the normal pull-request merge path. Its read-only gate reuses the version/change helper: docs, README, comments, and workflow-only pushes with no newer application version finish successfully without a Release; release-impacting pushes must carry a newer stable SemVer, and pre-release versions are rejected for this production channel. The release job alone has `contents: write`; it uses the GitHub-provided `GITHUB_TOKEN`, Tauri signing secrets, and the immutable SHA for `tauri-apps/tauri-action` `action-v1.0.0`. Before building, it checks the version/tag; after all preflight checks, the workflow atomically creates the version-derived tag at the current commit and reserves a draft Release through the GitHub API. The Tauri action receives `tagName: v__VERSION__` and the newly created Release ID, then builds and uploads the NSIS setup, its `.sig`, and `latest.json` without adopting or overwriting another Release. A final automatic step verifies all expected assets, compares against the highest published non-prerelease SemVer, refuses to publish an older rerun, and publishes the Release only after the signed assets and updater metadata upload succeeds; a failed build leaves the Release unpublished. `updaterJsonPreferNsis` prevents MSI selection. The workflow is not triggered by tag pushes, so the generated tag cannot recursively start another release. No `git tag`, `git push`, PAT, or manual Release operation is used.
 
 ## Release procedure
 
+### One-time prerequisites
+
 1. Complete the Phase 6 PR review and confirm unresolved P0/P1/P2 = 0.
 2. Complete the full-history secret review, then explicitly change repository visibility to public.
-3. Generate the signing key, commit or configure its public key, create both signing Secrets, create the public-key Variable, and verify the independent encrypted backup.
-4. Bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the same SemVer.
-5. Run all local checks and merge the reviewed change.
-6. Create and push `v<version>`; inspect the draft Release assets and workflow logs for leakage.
-7. Publish the Release, then verify unauthenticated setup/latest.json downloads.
-8. Perform clean install/start/tray/uninstall smoke.
-9. For N+1, install N, save a preset/settings, publish N+1, check/download/install, allow the Windows updater installer to restart, and verify retained data.
-10. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
-11. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
+3. Generate the signing key, configure its public key, create both signing Secrets, create the public-key Variable, and verify the independent encrypted backup.
+
+### Normal release
+
+1. In the implementation PR, bump `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` to the same next SemVer.
+2. Complete review and CI, including the release-impacting-change version-bump check.
+3. Merge the PR into `main`.
+4. The Release workflow automatically runs its gate and preflight checks, builds and signs the Windows x86_64 NSIS bundle, and verifies that `v<version>` is unused.
+5. The workflow atomically creates `v<version>` and a temporary draft `window-tabs v<version>` Release at the merged commit; Tauri action builds and uploads the setup/updater/signature/`latest.json` assets, then an automatic final step verifies the complete asset set and publishes the Release.
+6. Verify unauthenticated setup/latest.json downloads and perform the clean-install or N→N+1 smoke appropriate for the release.
+
+No normal release step requires manually creating or pushing a tag, creating a GitHub Release, or publishing a draft Release. The workflow stops with a clear error if the application version is not stable, already has a tag for another commit, has an unrecognized/incomplete published Release, or has a Release with a different marker. A retry may resume only an automated draft whose tag points to the same merged commit: a complete draft uses publish-only, while a partial draft rebuilds and replaces only the generated asset names through the pinned action. Before publishing, it compares the candidate SemVer with the highest published non-prerelease SemVer; an older or equal stale rerun fails without publishing or modifying the published Release. A completed automated Release is treated as an idempotent successful retry. It never force-updates a tag or modifies a published Release's assets.
+
+### Ongoing distribution verification
+
+1. For N+1, install N, save a preset/settings, merge the version-bumped PR, allow the Windows updater installer to restart, and verify retained data.
+2. Exercise unavailable metadata, invalid-signature test metadata in an isolated test channel, interrupted download, and install failure; verify N remains usable.
+3. Record evidence in `docs/phase-reviews/PHASE-06.md`. Only then may distribution be approved.
 
 ## Acceptance gate
 
