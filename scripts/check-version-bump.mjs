@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { compareSemVer } from "./check-release-version.mjs";
+import { assertStableReleaseVersion, compareSemVer } from "./check-release-version.mjs";
 
 const releaseImpactingPaths = [
   /^src\//,
@@ -274,6 +274,7 @@ function changedFilesWithCode(base) {
 
 export function shouldReleaseForMainPush({ hasCodeChange, baseVersion, currentVersion }) {
   const versionComparison = compareSemVer(currentVersion, baseVersion);
+  assertStableReleaseVersion(currentVersion);
   if (!hasCodeChange && versionComparison === 0) return false;
   if (versionComparison <= 0) {
     throw new Error(
@@ -322,6 +323,7 @@ export function checkVersionBump({ base, currentVersion = JSON.parse(readFileSyn
   if (!hasCodeChange) return { required: false, impactfulFiles, currentVersion };
 
   const baseVersion = readVersionAtRevision(base);
+  assertStableReleaseVersion(currentVersion);
   if (compareSemVer(currentVersion, baseVersion) <= 0) {
     const direction = currentVersion === baseVersion ? "still" : `must be newer than ${baseVersion} (current ${currentVersion})`;
     throw new Error(

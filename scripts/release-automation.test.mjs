@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { compareSemVer, latestPublishedVersion, releaseTagForVersion, shouldPublishAsLatest } from "./check-release-version.mjs";
+import { assertStableReleaseVersion, compareSemVer, latestPublishedVersion, releaseTagForVersion, shouldPublishAsLatest } from "./check-release-version.mjs";
 import { hasExecutableDiff, isReleaseImpactingPath, shouldReleaseForMainPush } from "./check-version-bump.mjs";
 import { expectedReleaseAssets } from "./release-assets.cjs";
 
@@ -11,6 +11,11 @@ describe("release automation helpers", () => {
 
   it("rejects a non-SemVer application version", () => {
     expect(() => releaseTagForVersion("0.1")).toThrow("invalid application version");
+  });
+
+  it("rejects pre-release versions from production releases", () => {
+    expect(() => assertStableReleaseVersion("0.2.0-rc.1")).toThrow("production releases require a stable SemVer");
+    expect(assertStableReleaseVersion("0.2.0")).toBe("0.2.0");
   });
 
   it("orders stable and pre-release SemVer values", () => {
@@ -46,7 +51,9 @@ describe("release automation helpers", () => {
 
   it("skips non-release main pushes and rejects non-increasing releases", () => {
     expect(shouldReleaseForMainPush({ hasCodeChange: false, baseVersion: "0.1.1", currentVersion: "0.1.1" })).toBe(false);
+    expect(() => shouldReleaseForMainPush({ hasCodeChange: false, baseVersion: "0.2.0-rc.1", currentVersion: "0.2.0-rc.1" })).toThrow("production releases require a stable SemVer");
     expect(shouldReleaseForMainPush({ hasCodeChange: true, baseVersion: "0.1.1", currentVersion: "0.1.2" })).toBe(true);
+    expect(() => shouldReleaseForMainPush({ hasCodeChange: true, baseVersion: "0.1.1", currentVersion: "0.2.0-rc.1" })).toThrow("production releases require a stable SemVer");
     expect(() => shouldReleaseForMainPush({ hasCodeChange: true, baseVersion: "0.1.1", currentVersion: "0.1.1" })).toThrow("newer than 0.1.1");
     expect(() => shouldReleaseForMainPush({ hasCodeChange: true, baseVersion: "0.2.0", currentVersion: "0.1.9" })).toThrow("newer than 0.2.0");
   });

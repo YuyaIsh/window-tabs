@@ -19,6 +19,14 @@ export function releaseTagForVersion(version) {
   return `v${version}`;
 }
 
+export function assertStableReleaseVersion(version) {
+  const parsedVersion = parseSemVer(version);
+  if (parsedVersion.prerelease.length) {
+    throw new Error(`production releases require a stable SemVer without a pre-release suffix (current ${version})`);
+  }
+  return version;
+}
+
 function compareNumericIdentifiers(left, right) {
   const normalizedLeft = left.replace(/^0+(?=\d)/, "");
   const normalizedRight = right.replace(/^0+(?=\d)/, "");

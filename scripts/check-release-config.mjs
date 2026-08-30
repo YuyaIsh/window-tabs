@@ -1,5 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
+import { assertStableReleaseVersion } from "./check-release-version.mjs";
+
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const configUrl = new URL("../src-tauri/tauri.conf.json", import.meta.url);
 const config = JSON.parse(readFileSync(configUrl, "utf8"));
@@ -12,6 +14,11 @@ const errors = [];
 
 if (!versions.every((version) => version === versions[0])) errors.push(`version mismatch: ${versions.join(", ")}`);
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageJson.version)) errors.push("version must be SemVer");
+try {
+  assertStableReleaseVersion(packageJson.version);
+} catch (error) {
+  errors.push(error.message);
+}
 if (process.env.RELEASE_TAG && process.env.RELEASE_TAG !== `v${packageJson.version}`) errors.push(`release tag must be v${packageJson.version}`);
 if (config.identifier !== "io.github.yuyaish.window-tabs") errors.push("production identifier changed");
 if (!config.bundle?.targets?.includes("nsis")) errors.push("NSIS is not a bundle target");
