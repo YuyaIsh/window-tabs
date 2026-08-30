@@ -419,7 +419,9 @@ Windows 10で日常利用できる製品回帰に加え、public GitHub Release�
 - SemVer/config/tag整合checkとtracked private-key check
 - 通常のReleaseは`main` pushだけで開始し、workflowがversionからtagとReleaseをatomic予約し、Tauri actionが同じReleaseへupdater metadataを自動upload
 - Release前に既存`v<version>` tagを検出してfail-closedに停止し、同じversionのartifactを上書きしない
+- main push gateは既存helperを再利用し、release-impacting changeがなくversionも同じpushは正常skip、release-impacting changeはbaseより新しいSemVerを要求する
 - 配布binaryに影響するPRはversion bumpをCIで要求し、docs/README/コメントのみの変更は対象外
+- 同一commitのmarked draftは再実行可能とし、complete assetならpublish-only、partial assetなら生成assetだけを再構築する。公開済みReleaseは変更しない
 - public化前のfull-history secret scan
 - 詳細とrelease手順は `docs/DISTRIBUTION.md`
 

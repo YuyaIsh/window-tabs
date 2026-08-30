@@ -13,7 +13,29 @@ permissions:
   contents: read
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.release-gate.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether this main push needs a release
+        id: release-gate
+        shell: bash
+        run: |
+          decision="$(node scripts/check-version-bump.mjs --main-push --base "${{ github.event.before }}")"
+          echo "should_release=$decision" >> "$GITHUB_OUTPUT"
+          if [ "$decision" = "true" ]; then
+            echo "release-impacting changes or a newer application version require a release."
+          else
+            echo "no release-impacting changes and no application version bump; skipping release."
+          fi
+
   release:
+    needs: gate
+    if: needs.gate.outputs.should_release == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -96,6 +118,7 @@ jobs:
                 prerelease: false,
               });
               core.setOutput('release_id', release.data.id.toString());
+              core.setOutput('resume_mode', 'rebuild');
               core.info(`Created Release for ${tag}.`);
             } catch (error) {
               if (error.status !== 422) throw error;
@@ -105,20 +128,50 @@ jobs:
                 repo: context.repo.repo,
                 per_page: 100,
               })).find((release) => release.tag_name === tag);
-              if (
-                existingRelease?.draft === true &&
-                existingRelease.name === releaseName &&
-                existingRelease.body === releaseBody &&
-                existingRelease.assets.length === 0
-              ) {
-                core.setOutput('release_id', existingRelease.id.toString());
-                core.warning(`${tag} has an empty automated draft Release for this commit; resuming the incomplete release attempt.`);
+              if (!existingRelease || existingRelease.name !== releaseName || existingRelease.body !== releaseBody) {
+                core.setFailed(`${tag} already exists with a Release. Bump the application version before releasing.`);
                 return;
               }
-              core.setFailed(`${tag} already exists with a Release. Bump the application version before releasing.`);
+
+              const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existingRelease.id,
+                per_page: 100,
+              });
+              const assetNames = new Set(assets.map((asset) => asset.name || asset.label));
+              const expectedAssets = [
+                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe`,
+                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe.sig`,
+                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip`,
+                `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip.sig`,
+                'latest.json',
+              ];
+              const hasCompleteAssets = expectedAssets.every((assetName) => assetNames.has(assetName));
+
+              if (existingRelease.draft) {
+                core.setOutput('release_id', existingRelease.id.toString());
+                core.setOutput('resume_mode', hasCompleteAssets ? 'publish' : 'rebuild');
+                core.warning(
+                  hasCompleteAssets
+                    ? `${tag} has a complete automated draft Release; resuming with publish-only.`
+                    : `${tag} has an incomplete automated draft Release; rebuilding and replacing only generated assets.`,
+                );
+                return;
+              }
+
+              if (hasCompleteAssets) {
+                core.setOutput('release_id', existingRelease.id.toString());
+                core.setOutput('resume_mode', 'published');
+                core.warning(`${tag} is already a complete published automated Release; treating the retry as successful.`);
+                return;
+              }
+
+              core.setFailed(`${tag} already has an incomplete published Release. It will not be modified; bump the application version before releasing.`);
             }
       # action-v1.0.0. Keep the full immutable revision for reviewable releases.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
+        if: success() && steps.reserve-release.outputs.resume_mode != 'publish' && steps.reserve-release.outputs.resume_mode != 'published'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -139,13 +192,42 @@ jobs:
       - name: Publish release after assets are uploaded
         if: success()
         uses: actions/github-script@v7
+        env:
+          RELEASE_VERSION: ${{ steps.release-version.outputs.version }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            await github.rest.repos.updateRelease({
+            const release = await github.rest.repos.getRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: Number('${{ steps.reserve-release.outputs.release_id }}'),
+            });
+            const expectedAssets = [
+              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe`,
+              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.exe.sig`,
+              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip`,
+              `window-tabs_${process.env.RELEASE_VERSION}_x64-setup.nsis.zip.sig`,
+              'latest.json',
+            ];
+            const assetNames = new Set((await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              per_page: 100,
+            })).map((asset) => asset.name || asset.label));
+            const missingAssets = expectedAssets.filter((assetName) => !assetNames.has(assetName));
+            if (missingAssets.length > 0) {
+              core.setFailed(`refusing to publish ${release.data.tag_name}; missing assets: ${missingAssets.join(', ')}`);
+              return;
+            }
+            if (!release.data.draft) {
+              core.info(`Release ${release.data.tag_name} is already published with all expected assets.`);
+              return;
+            }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
               draft: false,
               prerelease: false,
             });

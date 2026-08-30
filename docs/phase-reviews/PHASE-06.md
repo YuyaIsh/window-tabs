@@ -85,12 +85,12 @@ The fixes require reviewer re-review before code approval is restored.
 
 - The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.1`.
 - `.github/workflows/release.yml` now runs on `main` pushes only. It does not run from tag pushes or require a manual dispatch/tag.
-- Before Release creation, `actions/github-script` atomically creates the version-derived tag at the current commit and a new marked draft Release with `GITHUB_TOKEN`; a final automatic step publishes it only after Tauri asset upload succeeds. It stops with `Bump the application version before releasing.` for a tag on another commit, a published Release, or an unrecognized/non-empty draft. A retry may resume only an empty marked draft for the same commit, without force-updating the tag or overwriting assets.
+- Before Release creation, a read-only main-push gate reuses the version/change helper and skips docs/README/comment/workflow-only pushes with no newer version. Release-impacting pushes require a newer SemVer. `actions/github-script` then atomically creates the version-derived tag at the current commit and a new marked draft Release with `GITHUB_TOKEN`; a final automatic step verifies all expected assets and publishes it only after Tauri asset upload succeeds. It stops with a clear error for a tag on another commit, a different or incomplete published Release, or an unrecognized Release. A same-commit marked draft retry uses publish-only when complete and rebuilds only generated assets when partial; a completed automated Release is idempotent without modifying published assets.
 - The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `releaseId`, `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow. The action builds and uploads assets for that immutable Release.
-- PR CI checks that release-impacting code/dependency changes change the application version; documentation, README, and comment-only changes do not require a bump.
+- PR CI checks that release-impacting code/dependency changes increase the application version; equal or lower versions are rejected. Documentation, README, and comment-only changes do not require a bump.
 - The release workflow uses a non-canceling concurrency group so queued `main` releases re-check the tag after the earlier release completes.
 
-Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
+Current unresolved P0/P1/P2: **0** after the latest review fixes, pending reviewer re-review.
 
 ## Deferred
 
@@ -100,6 +100,6 @@ Current unresolved P0/P1/P2: **0**, pending reviewer re-review.
 
 ## Approval
 
-- Code review: **IN_REVIEW** (the four P2 fixes are awaiting reviewer confirmation).
+- Code review: **IN_REVIEW** (the latest three P2 fixes are awaiting reviewer confirmation).
 - Release acceptance: BLOCKED — real public release and N→N+1 smoke are not run.
 - Phase 6: **BLOCKED: RELEASE VERIFICATION**.
