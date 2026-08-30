@@ -49,4 +49,16 @@ describe("release automation helpers", () => {
     const inlineCloseDiff = "@@ -1,2 +1,2 @@\n /*\n-old note */\n+new note */";
     expect(hasExecutableDiff(inlineCloseDiff, "src/styles.css", { before: inlineCloseBefore, after: inlineCloseAfter })).toBe(false);
   });
+
+  it("does not treat comment markers inside CSS or TypeScript strings as comments", () => {
+    const cssBefore = '--marker: "/*";\n.button { color: red; }\n';
+    const cssAfter = '--marker: "/*";\n.button { color: blue; }\n';
+    const cssDiff = "@@ -1,2 +1,2 @@\n --marker: \"/*\";\n-.button { color: red; }\n+.button { color: blue; }";
+    expect(hasExecutableDiff(cssDiff, "src/styles.css", { before: cssBefore, after: cssAfter })).toBe(true);
+
+    const tsBefore = "const marker = `/*`;\nconst value = 1;\n";
+    const tsAfter = "const marker = `/*`;\nconst value = 2;\n";
+    const tsDiff = "@@ -1,2 +1,2 @@\n const marker = `/*`;\n-const value = 1;\n+const value = 2;";
+    expect(hasExecutableDiff(tsDiff, "src/core/example.ts", { before: tsBefore, after: tsAfter })).toBe(true);
+  });
 });

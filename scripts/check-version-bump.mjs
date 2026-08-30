@@ -36,8 +36,12 @@ export function hasExecutableDiff(diff, filePath = "", sources = {}) {
 
 function blockCommentMarkers(filePath) {
   if (/\.html?$/i.test(filePath)) return { start: "<!--", end: "-->" };
-  if (/\.(?:[cm]?[jt]sx?|css)$/i.test(filePath)) return { start: "/*", end: "*/" };
+  if (/\.(?:[cm]?[jt]sx?|s?css|rs)$/i.test(filePath)) return { start: "/*", end: "*/" };
   return null;
+}
+
+function supportsSlashComments(filePath) {
+  return /\.(?:[cm]?[jt]sx?|rs)$/i.test(filePath);
 }
 
 function commentOnlyLineNumbers(source, filePath) {
@@ -46,6 +50,8 @@ function commentOnlyLineNumbers(source, filePath) {
 
   const commentOnlyLines = new Set();
   let inBlockComment = false;
+  let quote = null;
+  let escaped = false;
   source.split(/\r?\n/).forEach((line, index) => {
     let cursor = 0;
     let hasCode = false;
@@ -64,10 +70,38 @@ function commentOnlyLineNumbers(source, filePath) {
         continue;
       }
 
-      const start = line.indexOf(markers.start, cursor);
-      if (start === -1) {
+      if (quote) {
         if (line.slice(cursor).trim()) hasCode = true;
+        const character = line[cursor];
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        cursor += 1;
+        continue;
+      }
+
+      if (supportsSlashComments(filePath) && !line.slice(0, cursor).trim() && line.slice(cursor).trimStart().startsWith("//")) {
         break;
+      }
+
+      const start = line.indexOf(markers.start, cursor);
+      const quotePositions = [line.indexOf("\"", cursor), line.indexOf("'", cursor), line.indexOf("`", cursor)].filter((position) => position >= 0);
+      const nextQuote = quotePositions.length ? Math.min(...quotePositions) : -1;
+      if (start === -1 || (nextQuote >= 0 && nextQuote < start)) {
+        if (nextQuote === -1) {
+          if (line.slice(cursor).trim()) hasCode = true;
+          break;
+        }
+        if (line.slice(cursor, nextQuote).trim()) hasCode = true;
+        hasCode = true;
+        quote = line[nextQuote];
+        escaped = false;
+        cursor = nextQuote + 1;
+        continue;
       }
       if (line.slice(cursor, start).trim()) hasCode = true;
       hasBlockComment = true;
@@ -76,7 +110,7 @@ function commentOnlyLineNumbers(source, filePath) {
     }
 
     const trimmed = line.trim();
-    const singleLineComment = /^(?:\/\/|#)/.test(trimmed) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
+    const singleLineComment = (supportsSlashComments(filePath) && trimmed.startsWith("//")) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
     if (!hasCode && (hasBlockComment || singleLineComment || markers.start === "/*" && line.trim() === "")) {
       commentOnlyLines.add(index + 1);
     }
