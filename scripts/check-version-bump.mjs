@@ -46,9 +46,19 @@ function supportsSlashComments(filePath) {
 
 function commentOnlyLineNumbers(source, filePath) {
   const markers = blockCommentMarkers(filePath);
-  if (!markers) return new Set();
-
   const commentOnlyLines = new Set();
+  const supportsHashComments = /\.(?:toml|ya?ml)$/i.test(filePath);
+  const supportsSlashCommentsForFile = supportsSlashComments(filePath);
+  if (!markers) {
+    source.split(/\r?\n/).forEach((line, index) => {
+      const trimmed = line.trim();
+      if ((supportsHashComments && trimmed.startsWith("#")) || (supportsSlashCommentsForFile && trimmed.startsWith("//"))) {
+        commentOnlyLines.add(index + 1);
+      }
+    });
+    return commentOnlyLines;
+  }
+
   let inBlockComment = false;
   let quote = null;
   let escaped = false;
@@ -110,7 +120,7 @@ function commentOnlyLineNumbers(source, filePath) {
     }
 
     const trimmed = line.trim();
-    const singleLineComment = (supportsSlashComments(filePath) && trimmed.startsWith("//")) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
+    const singleLineComment = (supportsSlashCommentsForFile && trimmed.startsWith("//")) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
     if (!hasCode && (hasBlockComment || singleLineComment || markers.start === "/*" && line.trim() === "")) {
       commentOnlyLines.add(index + 1);
     }
@@ -151,7 +161,7 @@ function hasExecutableDiffWithSources(diff, filePath, sources = {}) {
     const afterCommentLines = commentOnlyLineNumbers(sources.after || "", filePath);
     return changedDiffLines(diff).some(({ side, lineNumber, text }) => {
       const commentLines = side === "after" ? afterCommentLines : beforeCommentLines;
-      return !commentLines.has(lineNumber) && !isCommentOnlyLine(text.trim(), filePath);
+      return !commentLines.has(lineNumber);
     });
   }
   return diff.split(/\r?\n/).some((line) => {

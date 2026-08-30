@@ -60,5 +60,10 @@ describe("release automation helpers", () => {
     const tsAfter = "const marker = `/*`;\nconst value = 2;\n";
     const tsDiff = "@@ -1,2 +1,2 @@\n const marker = `/*`;\n-const value = 1;\n+const value = 2;";
     expect(hasExecutableDiff(tsDiff, "src/core/example.ts", { before: tsBefore, after: tsAfter })).toBe(true);
+
+    const multilineBefore = "const message = `\n/* old\n`;\n";
+    const multilineAfter = "const message = `\n/* new\n`;\n";
+    const multilineDiff = "@@ -1,3 +1,3 @@\n const message = `\n-/* old\n+/* new\n `;";
+    expect(hasExecutableDiff(multilineDiff, "src/core/example.ts", { before: multilineBefore, after: multilineAfter })).toBe(true);
   });
 });
