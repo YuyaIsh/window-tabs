@@ -193,12 +193,59 @@ function changedDiffLines(diff) {
   return changedLines;
 }
 
+function changedDiffGroups(diff) {
+  const groups = [];
+  let group = [];
+  const flush = () => {
+    if (group.length) groups.push(group);
+    group = [];
+  };
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
+      flush();
+    } else if (line.startsWith("+")) {
+      group.push({ side: "after", text: line.slice(1) });
+    } else if (line.startsWith("-")) {
+      group.push({ side: "before", text: line.slice(1) });
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return groups;
+}
+
+function blockCommentDelimiterSignature(text, filePath) {
+  const markers = blockCommentMarkers(filePath);
+  if (markers === null) return [];
+  return [markers.start, markers.end].filter((marker) => text.includes(marker));
+}
+
+function changesBlockCommentDelimiter(diff, filePath) {
+  return changedDiffGroups(diff).some((group) => {
+    const added = group
+      .filter(({ side }) => side === "after")
+      .map(({ text }) => blockCommentDelimiterSignature(text, filePath));
+    const removed = group
+      .filter(({ side }) => side === "before")
+      .map(({ text }) => blockCommentDelimiterSignature(text, filePath));
+    const length = Math.max(added.length, removed.length);
+    for (let index = 0; index < length; index += 1) {
+      const addedSignature = added[index]?.join("\n") || "";
+      const removedSignature = removed[index]?.join("\n") || "";
+      if (addedSignature !== removedSignature) return true;
+    }
+    return false;
+  });
+}
+
 function hasExecutableDiffWithSources(diff, filePath, sources = {}) {
   if (diff.includes("Binary files ")) return true;
   if (sources.before !== undefined || sources.after !== undefined) {
     const beforeCommentLines = commentOnlyLineNumbers(sources.before || "", filePath);
     const afterCommentLines = commentOnlyLineNumbers(sources.after || "", filePath);
-    return changedDiffLines(diff).some(({ side, lineNumber, text }) => {
+    if (changesBlockCommentDelimiter(diff, filePath)) return true;
+    return changedDiffLines(diff).some(({ side, lineNumber }) => {
       const commentLines = side === "after" ? afterCommentLines : beforeCommentLines;
       return !commentLines.has(lineNumber);
     });

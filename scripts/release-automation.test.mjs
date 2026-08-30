@@ -78,4 +78,11 @@ describe("release automation helpers", () => {
     const yamlDiff = "@@ -1,2 +1,2 @@\n message: |\n-  # old\n+  # new";
     expect(hasExecutableDiff(yamlDiff, "pnpm-lock.yaml", { before: yamlBefore, after: yamlAfter })).toBe(true);
   });
+
+  it("treats changed block-comment delimiters as executable syntax changes", () => {
+    const before = "/* gate */\n.button { color: red; }\n";
+    const after = "/* gate\n.button { color: red; }\n*/\n";
+    const diff = "@@ -1,2 +1,3 @@\n-/* gate */\n+/* gate\n .button { color: red; }\n+*/";
+    expect(hasExecutableDiff(diff, "src/styles.css", { before, after })).toBe(true);
+  });
 });
