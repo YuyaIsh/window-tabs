@@ -100,6 +100,6 @@ Current unresolved P0/P1/P2: **0** after the latest review fixes, pending review
 
 ## Approval
 
-- Code review: **IN_REVIEW** (the latest three P2 fixes are awaiting reviewer confirmation).
+- Code review: **IN_REVIEW** (the latest review fixes are awaiting reviewer confirmation).
 - Release acceptance: BLOCKED — real public release and N→N+1 smoke are not run.
 - Phase 6: **BLOCKED: RELEASE VERIFICATION**.

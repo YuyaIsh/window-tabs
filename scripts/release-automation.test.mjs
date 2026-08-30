@@ -37,4 +37,11 @@ describe("release automation helpers", () => {
     expect(hasExecutableDiff("+# comment", "src-tauri/Cargo.toml")).toBe(false);
     expect(hasExecutableDiff("+const changed = true;", "src/core/controller.ts")).toBe(true);
   });
+
+  it("ignores changed lines inside multiline CSS comments", () => {
+    const before = "/*\nold note\n*/\n";
+    const after = "/*\nnew note\n*/\n";
+    const diff = "@@ -1,3 +1,3 @@\n /*\n-old note\n+new note\n */";
+    expect(hasExecutableDiff(diff, "src/styles.css", { before, after })).toBe(false);
+  });
 });

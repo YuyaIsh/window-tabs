@@ -30,8 +30,93 @@ function isCommentOnlyLine(line, filePath) {
   return false;
 }
 
-export function hasExecutableDiff(diff, filePath = "") {
+export function hasExecutableDiff(diff, filePath = "", sources = {}) {
+  return hasExecutableDiffWithSources(diff, filePath, sources);
+}
+
+function blockCommentMarkers(filePath) {
+  if (/\.html?$/i.test(filePath)) return { start: "<!--", end: "-->" };
+  if (/\.(?:[cm]?[jt]sx?|css)$/i.test(filePath)) return { start: "/*", end: "*/" };
+  return null;
+}
+
+function commentOnlyLineNumbers(source, filePath) {
+  const markers = blockCommentMarkers(filePath);
+  if (!markers) return new Set();
+
+  const commentOnlyLines = new Set();
+  let inBlockComment = false;
+  source.split(/\r?\n/).forEach((line, index) => {
+    let cursor = 0;
+    let hasCode = false;
+
+    while (cursor < line.length) {
+      if (inBlockComment) {
+        const end = line.indexOf(markers.end, cursor);
+        if (end === -1) {
+          cursor = line.length;
+          break;
+        }
+        inBlockComment = false;
+        cursor = end + markers.end.length;
+        continue;
+      }
+
+      const start = line.indexOf(markers.start, cursor);
+      if (start === -1) {
+        if (line.slice(cursor).trim()) hasCode = true;
+        break;
+      }
+      if (line.slice(cursor, start).trim()) hasCode = true;
+      inBlockComment = true;
+      cursor = start + markers.start.length;
+    }
+
+    const trimmed = line.trim();
+    const singleLineComment = /^(?:\/\/|#)/.test(trimmed) || (markers.start === "<!--" && trimmed.startsWith("<!--"));
+    if (!hasCode && (inBlockComment || singleLineComment || markers.start === "/*" && line.trim() === "")) {
+      commentOnlyLines.add(index + 1);
+    }
+  });
+  return commentOnlyLines;
+}
+
+function changedDiffLines(diff) {
+  let oldLine = 0;
+  let newLine = 0;
+  const changedLines = [];
+  for (const line of diff.split(/\r?\n/)) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      continue;
+    }
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) {
+      changedLines.push({ side: "after", lineNumber: newLine, text: line.slice(1) });
+      newLine += 1;
+    } else if (line.startsWith("-")) {
+      changedLines.push({ side: "before", lineNumber: oldLine, text: line.slice(1) });
+      oldLine += 1;
+    } else if (line.startsWith(" ")) {
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+  return changedLines;
+}
+
+function hasExecutableDiffWithSources(diff, filePath, sources = {}) {
   if (diff.includes("Binary files ")) return true;
+  if (sources.before !== undefined || sources.after !== undefined) {
+    const beforeCommentLines = commentOnlyLineNumbers(sources.before || "", filePath);
+    const afterCommentLines = commentOnlyLineNumbers(sources.after || "", filePath);
+    return changedDiffLines(diff).some(({ side, lineNumber, text }) => {
+      const commentLines = side === "after" ? afterCommentLines : beforeCommentLines;
+      return !commentLines.has(lineNumber) && !isCommentOnlyLine(text.trim(), filePath);
+    });
+  }
   return diff.split(/\r?\n/).some((line) => {
     if (!/^[+-]/.test(line) || line.startsWith("+++") || line.startsWith("---")) return false;
     const changedLine = line.slice(1).trim();
@@ -42,7 +127,14 @@ export function hasExecutableDiff(diff, filePath = "") {
 function changedFilesWithCode(base) {
   const impactfulFiles = changedFiles(base).filter(isReleaseImpactingPath);
   const hasCodeChange = impactfulFiles.some((filePath) =>
-    hasExecutableDiff(git(["diff", "--unified=0", base, "--", filePath]), filePath),
+    hasExecutableDiffWithSources(
+      git(["diff", "--unified=0", base, "--", filePath]),
+      filePath,
+      {
+        before: readGitFile(base, filePath),
+        after: readWorkingTreeFile(filePath),
+      },
+    ),
   );
   return { impactfulFiles, hasCodeChange };
 }
@@ -64,6 +156,22 @@ function git(args) {
 
 function readVersionAtRevision(revision) {
   return JSON.parse(git(["show", `${revision}:package.json`])).version;
+}
+
+function readGitFile(revision, filePath) {
+  try {
+    return git(["show", `${revision}:${filePath}`]);
+  } catch {
+    return "";
+  }
+}
+
+function readWorkingTreeFile(filePath) {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 function changedFiles(base) {
