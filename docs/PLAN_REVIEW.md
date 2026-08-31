@@ -173,3 +173,23 @@ individual-Task-View and "host excluded" assertions were no longer valid.
   until observed on the target Windows 10 environment.
 
 Result: **FIXED; RE-REVIEW REQUIRED**
+
+## Review round 8: native host safety follow-up
+
+The follow-up review identified four issues in the integrated-host changes:
+the actual host HWND was not proven to carry mixed-DPI hosting behavior, abort
+rollback used the persistent standalone snapshots instead of transaction-start
+state, updater/quit could continue after a failed restore, and the `SetParent`
+style order was reversed. The implementation now dispatches host creation to
+the Tauri main/event-loop thread, verifies the created HWND with
+`GetWindowDpiHostingBehavior`, keeps native transaction snapshots separate from
+recovery records, gates updater install and tray quit on successful restore,
+and applies `WS_CHILD` before `SetParent`.
+
+Automated checks: local rerun PASS (frontend tests/build, release gates,
+Windows-target fmt/check/test/clippy). Computer Use also confirmed the rebuilt
+debug binary can add a second Chrome HWND under the existing host and restore
+both top-level windows after host close. Windows 10 GUI, physical mixed-DPI,
+and public signed N→N+1 updater verification remain `NOT RUN`.
+
+Result: **FIXED; RE-REVIEW REQUIRED**

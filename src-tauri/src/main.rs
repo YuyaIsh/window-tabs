@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIcon, TrayIconBuilder},
@@ -111,8 +111,8 @@ mod windows_backend {
             WPARAM,
         },
         Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFOEXW,
-            MONITOR_DEFAULTTONEAREST,
+            EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, HDC, HMONITOR,
+            MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
         },
         System::Threading::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -121,10 +121,10 @@ mod windows_backend {
         UI::{
             Accessibility::{SetWinEventHook, HWINEVENTHOOK},
             HiDpi::{
-                GetAwarenessFromDpiAwarenessContext, GetDpiForWindow, GetThreadDpiHostingBehavior,
-                GetWindowDpiAwarenessContext, IsValidDpiAwarenessContext,
-                SetThreadDpiHostingBehavior, DPI_AWARENESS_INVALID, DPI_HOSTING_BEHAVIOR_INVALID,
-                DPI_HOSTING_BEHAVIOR_MIXED,
+                GetAwarenessFromDpiAwarenessContext, GetDpiForWindow, GetWindowDpiAwarenessContext,
+                GetWindowDpiHostingBehavior, IsValidDpiAwarenessContext,
+                SetThreadDpiHostingBehavior, DPI_AWARENESS_INVALID, DPI_HOSTING_BEHAVIOR,
+                DPI_HOSTING_BEHAVIOR_INVALID, DPI_HOSTING_BEHAVIOR_MIXED,
             },
             Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL},
             WindowsAndMessaging::*,
@@ -143,6 +143,12 @@ mod windows_backend {
         style: i32,
         exstyle: i32,
         frame: Rect,
+        visible: bool,
+    }
+    #[derive(Clone)]
+    struct TransactionSnapshot {
+        native: HostedWindow,
+        registry: Option<HostedWindow>,
     }
     #[derive(Clone, Default)]
     struct GroupRegistry {
@@ -274,8 +280,6 @@ mod windows_backend {
                 return Ok(());
             }
             let _ = ShowWindow(window, SW_HIDE);
-            SetParent(window, HWND(saved.parent as *mut c_void))
-                .map_err(|error| format!("SetParent(restore) failed: {error}"))?;
             set_window_long_checked(
                 window,
                 GWL_STYLE,
@@ -291,16 +295,51 @@ mod windows_backend {
             SetWindowPos(
                 window,
                 HWND::default(),
-                saved.frame.x,
-                saved.frame.y,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+            .map_err(|error| format!("SetWindowPos(restore) failed: {error}"))?;
+            SetParent(window, HWND(saved.parent as *mut c_void))
+                .map_err(|error| format!("SetParent(restore) failed: {error}"))?;
+            let (x, y) = if saved.parent == 0 {
+                (saved.frame.x, saved.frame.y)
+            } else {
+                let mut point = POINT {
+                    x: saved.frame.x,
+                    y: saved.frame.y,
+                };
+                if !ScreenToClient(HWND(saved.parent as *mut c_void), &mut point).as_bool() {
+                    return Err("ScreenToClient(restore) failed".into());
+                }
+                (point.x, point.y)
+            };
+            SetWindowPos(
+                window,
+                HWND::default(),
+                x,
+                y,
                 saved.frame.width,
                 saved.frame.height,
                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
             )
-            .map_err(|error| format!("SetWindowPos(restore) failed: {error}"))?;
-            let _ = ShowWindow(window, SW_SHOWNA);
+            .map_err(|error| format!("SetWindowPos(restore frame) failed: {error}"))?;
+            let _ = ShowWindow(window, if saved.visible { SW_SHOWNA } else { SW_HIDE });
             if GetParent(window).unwrap_or_default().0 != saved.parent as *mut c_void {
                 return Err("window parent was not restored".into());
+            }
+            let actual_frame = frame_for(window).ok_or("window frame was not restored")?;
+            if actual_frame.x != saved.frame.x
+                || actual_frame.y != saved.frame.y
+                || actual_frame.width != saved.frame.width
+                || actual_frame.height != saved.frame.height
+            {
+                return Err("window frame was not restored".into());
+            }
+            if IsWindowVisible(window).as_bool() != saved.visible {
+                return Err("window visibility was not restored".into());
             }
         }
         Ok(())
@@ -358,7 +397,17 @@ mod windows_backend {
             Err(errors.join("; "))
         }
     }
-    pub fn enable_mixed_dpi_hosting() -> Result<(), String> {
+    struct DpiHostingGuard(DPI_HOSTING_BEHAVIOR);
+    impl Drop for DpiHostingGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = SetThreadDpiHostingBehavior(self.0);
+            }
+        }
+    }
+    pub fn with_mixed_dpi_hosting<T>(
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
         unsafe {
             let previous = SetThreadDpiHostingBehavior(DPI_HOSTING_BEHAVIOR_MIXED);
             if previous.0 == DPI_HOSTING_BEHAVIOR_INVALID.0 {
@@ -366,10 +415,23 @@ mod windows_backend {
                     "mixed-DPI window hosting is unavailable on this Windows version".into(),
                 );
             }
+            let _guard = DpiHostingGuard(previous);
+            operation()
+        }
+    }
+    pub fn validate_group_host_dpi(host: HWND) -> Result<(), String> {
+        unsafe {
+            if !IsWindow(host).as_bool() {
+                return Err("group host no longer exists".into());
+            }
+            if GetWindowDpiHostingBehavior(host).0 != DPI_HOSTING_BEHAVIOR_MIXED.0 {
+                return Err("group host was not created with mixed-DPI hosting".into());
+            }
         }
         Ok(())
     }
     fn validate_dpi_hosting(host: HWND, window: HWND) -> Result<(), String> {
+        validate_group_host_dpi(host)?;
         unsafe {
             let host_context = GetWindowDpiAwarenessContext(host);
             let window_context = GetWindowDpiAwarenessContext(window);
@@ -388,9 +450,6 @@ mod windows_backend {
                     "window DPI awareness is invalid for {:X}",
                     window.0 as usize
                 ));
-            }
-            if GetThreadDpiHostingBehavior().0 != DPI_HOSTING_BEHAVIOR_MIXED.0 {
-                return Err("group hosting thread is not configured for mixed-DPI hosting".into());
             }
             if GetDpiForWindow(host) == 0 || GetDpiForWindow(window) == 0 {
                 return Err(format!(
@@ -413,17 +472,22 @@ mod windows_backend {
             frame: frame_for(window)
                 .ok_or_else(|| "could not capture window frame".to_string())?
                 .clone(),
+            visible: unsafe { IsWindowVisible(window).as_bool() },
         })
     }
     fn abort_host_transaction(
         error: String,
         touched: &HashSet<usize>,
-        rollback: &HashMap<usize, HostedWindow>,
+        rollback: &HashMap<usize, TransactionSnapshot>,
     ) -> Result<(), String> {
         let mut rollback_errors = Vec::new();
-        for (raw, saved) in rollback {
-            if let Err(rollback_error) = restore_hosted(HWND(*raw as *mut c_void), saved.clone()) {
+        let mut rollback_failures = HashSet::new();
+        for (raw, snapshot) in rollback {
+            if let Err(rollback_error) =
+                restore_hosted(HWND(*raw as *mut c_void), snapshot.native.clone())
+            {
                 rollback_errors.push(rollback_error);
+                rollback_failures.insert(*raw);
             }
         }
         if let Ok(mut groups) = groups().lock() {
@@ -431,11 +495,26 @@ mod windows_backend {
                 for raw in touched {
                     groups.hosted.remove(raw);
                 }
+                for (raw, snapshot) in rollback {
+                    if let Some(saved) = &snapshot.registry {
+                        groups.hosted.insert(*raw, saved.clone());
+                    }
+                }
             } else {
                 // Keep a recovery record if any native restore failed. A
                 // later quit/update restore can retry the original state.
-                for (raw, saved) in rollback {
-                    groups.hosted.insert(*raw, saved.clone());
+                for raw in touched {
+                    groups.hosted.remove(raw);
+                }
+                for (raw, snapshot) in rollback {
+                    if let Some(saved) = &snapshot.registry {
+                        // Preserve the ownership that existed before this
+                        // transaction, including a source group during a
+                        // cross-group transfer rollback.
+                        groups.hosted.insert(*raw, saved.clone());
+                    } else if rollback_failures.contains(raw) {
+                        groups.hosted.insert(*raw, snapshot.native.clone());
+                    }
                 }
             }
         }
@@ -833,7 +912,7 @@ mod windows_backend {
         group_id: String,
         window_ids: Vec<String>,
         active_id: Option<String>,
-        frame: Rect,
+        _frame: Rect,
     ) -> Result<(), String> {
         let _mutation = host_mutations()
             .lock()
@@ -849,7 +928,7 @@ mod windows_backend {
         if !unsafe { IsWindow(host).as_bool() } {
             return Err("group host no longer exists".into());
         }
-        enable_mixed_dpi_hosting()?;
+        validate_group_host_dpi(host)?;
         let requested_windows = window_ids
             .iter()
             .map(|id| hwnd(id).map(|window| (id.clone(), window)))
@@ -871,11 +950,13 @@ mod windows_backend {
         let mut rollback = HashMap::new();
         for raw in &touched {
             let window = HWND(*raw as *mut c_void);
-            if let Some(saved) = initial.get(raw) {
-                rollback.insert(*raw, saved.clone());
-            } else {
-                rollback.insert(*raw, snapshot_window(window, &group_id)?);
-            }
+            rollback.insert(
+                *raw,
+                TransactionSnapshot {
+                    native: snapshot_window(window, &group_id)?,
+                    registry: initial.get(raw).cloned(),
+                },
+            );
         }
         for (_, window) in &requested_windows {
             if window.0 == host.0 {
@@ -920,15 +1001,15 @@ mod windows_backend {
                     }
                 }
                 if !same_group {
+                    if let Err(error) = strip_frame(*window) {
+                        return abort_host_transaction(error, &touched, &rollback);
+                    }
                     if let Err(error) = SetParent(*window, host).map_err(|e| e.to_string()) {
                         return abort_host_transaction(
                             format!("SetParent failed: {error}"),
                             &touched,
                             &rollback,
                         );
-                    }
-                    if let Err(error) = strip_frame(*window) {
-                        return abort_host_transaction(error, &touched, &rollback);
                     }
                     if GetParent(*window).unwrap_or_default().0 != host.0 {
                         return abort_host_transaction(
@@ -972,12 +1053,12 @@ mod windows_backend {
                 .retain(|raw, item| item.group_id != group_id || requested.contains(raw));
             for (_, window) in &requested_windows {
                 let raw = window.0 as usize;
-                let mut saved = rollback
-                    .get(&raw)
-                    .cloned()
-                    .expect("rollback snapshot exists");
+                let snapshot = rollback.get(&raw).expect("rollback snapshot exists");
+                let mut saved = snapshot
+                    .registry
+                    .clone()
+                    .unwrap_or_else(|| snapshot.native.clone());
                 saved.group_id = group_id.clone();
-                saved.frame = frame.clone();
                 groups.hosted.insert(raw, saved);
             }
         } else {
@@ -1037,9 +1118,6 @@ mod windows_backend {
     ) -> Result<(), String> {
         Err("Windows backend is unavailable on this platform".into())
     }
-    pub fn enable_mixed_dpi_hosting() -> Result<(), String> {
-        Ok(())
-    }
     pub fn restore_all_groups() -> Result<(), String> {
         Ok(())
     }
@@ -1083,10 +1161,17 @@ fn main() {
                         }
                         let _ = app.emit("launcher:check-updates", ());
                     }
-                    "quit" => {
-                        restore_all_groups_for_exit();
-                        app.exit(0);
-                    }
+                    "quit" => match windows_backend::restore_all_groups() {
+                        Ok(()) => app.exit(0),
+                        Err(error) => {
+                            eprintln!("failed to restore grouped windows before quit: {error}");
+                            let _ = app.emit("group-restore-failed", error);
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    },
                     id if id.starts_with("preset:") => {
                         let _ = app.emit("launcher:apply-preset", id.trim_start_matches("preset:"));
                     }
@@ -1209,7 +1294,7 @@ fn install_app_update(updater_state: State<'_, AppUpdaterState>) -> Result<(), S
         .ok_or_else(|| "update must be downloaded before install".to_string())?;
     // Keep this explicit guard in addition to the updater's hook. The latter
     // is the last line before the plugin launches the installer and exits.
-    restore_all_groups_for_exit();
+    windows_backend::restore_all_groups()?;
     update.install(bytes).map_err(|error| error.to_string())
 }
 
@@ -1232,9 +1317,35 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
     if app.get_window(&label).is_some() {
         return Ok(());
     }
-    #[cfg(target_os = "windows")]
-    windows_backend::enable_mixed_dpi_hosting()?;
-    let window = tauri::window::WindowBuilder::new(&app, &label)
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let app_for_main = app.clone();
+    app.run_on_main_thread(move || {
+        let result = {
+            #[cfg(target_os = "windows")]
+            {
+                windows_backend::with_mixed_dpi_hosting(|| {
+                    build_group_host_on_current_thread(&app_for_main, &label, &group_id)
+                })
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                build_group_host_on_current_thread(&app_for_main, &label, &group_id)
+            }
+        };
+        let _ = sender.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    receiver
+        .recv()
+        .map_err(|_| "group host creation did not complete".to_string())?
+}
+
+fn build_group_host_on_current_thread(
+    app: &tauri::AppHandle,
+    label: &str,
+    group_id: &str,
+) -> Result<(), String> {
+    let window = tauri::window::WindowBuilder::new(app, label)
         .title("window-tabs")
         .inner_size(720.0, 480.0)
         .resizable(true)
@@ -1249,33 +1360,42 @@ async fn open_group_host(app: tauri::AppHandle, group_id: String) -> Result<(), 
         })
         .build()
         .map_err(|error| error.to_string())?;
-    let strip = tauri::LogicalSize::new(720.0, 48.0);
-    window
-        .add_child(
-            tauri::webview::WebviewBuilder::new(
-                format!("group-strip-{group_id}"),
-                WebviewUrl::App(format!("index.html?group={group_id}").into()),
-            ),
-            tauri::LogicalPosition::new(0.0, 0.0),
-            strip,
-        )
-        .map_err(|error| error.to_string())?;
-    let close_group_id = group_id.clone();
-    let close_app = app.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if windows_backend::group_host_registered(&close_group_id) {
-                api.prevent_close();
-                let _ = close_app.emit("group-close-requested", close_group_id.clone());
+    let setup = (|| {
+        #[cfg(target_os = "windows")]
+        let host =
+            windows::Win32::Foundation::HWND(window.hwnd().map_err(|error| error.to_string())?.0);
+        #[cfg(target_os = "windows")]
+        windows_backend::validate_group_host_dpi(host)?;
+
+        let strip = tauri::LogicalSize::new(720.0, 48.0);
+        window
+            .add_child(
+                tauri::webview::WebviewBuilder::new(
+                    format!("group-strip-{group_id}"),
+                    WebviewUrl::App(format!("index.html?group={group_id}").into()),
+                ),
+                tauri::LogicalPosition::new(0.0, 0.0),
+                strip,
+            )
+            .map_err(|error| error.to_string())?;
+        let close_group_id = group_id.to_string();
+        let close_app = app.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if windows_backend::group_host_registered(&close_group_id) {
+                    api.prevent_close();
+                    let _ = close_app.emit("group-close-requested", close_group_id.clone());
+                }
             }
-        }
-    });
-    #[cfg(target_os = "windows")]
-    windows_backend::register_group_host(
-        group_id,
-        windows::Win32::Foundation::HWND(window.hwnd().map_err(|error| error.to_string())?.0),
-    );
-    Ok(())
+        });
+        #[cfg(target_os = "windows")]
+        windows_backend::register_group_host(group_id.to_string(), host);
+        Ok(())
+    })();
+    if setup.is_err() {
+        let _ = window.close();
+    }
+    setup
 }
 
 #[tauri::command]

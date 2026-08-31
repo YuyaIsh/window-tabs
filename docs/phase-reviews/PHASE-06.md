@@ -84,6 +84,31 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 - P2 — SPEC / ARCHITECTURE / IMPLEMENTATION_PLAN / phase evidence described the superseded floating-bar architecture. Updated them to document the integrated native group-host model and its restore / task-switcher semantics.
 - P2 — Release-impacting native changes had no version increment. Bumped synchronized application version from `0.1.1` to `0.1.2`.
 
+## Review round 8: native host safety follow-up
+
+The follow-up review found four remaining native-host concerns. The implementation now:
+
+- dispatches group-host creation to Tauri's main/event-loop thread while the
+  mixed-DPI thread behavior is active, then rejects a host unless its actual
+  HWND reports `DPI_HOSTING_BEHAVIOR_MIXED`;
+- snapshots the transaction-start native state separately from the persistent
+  standalone recovery record, and restores registry ownership together with
+  that native state on abort;
+- makes both updater install and tray quit pass through a successful full
+  restore gate, with quit failures emitted to the controller UI; and
+- applies the documented `WS_POPUP`/`WS_CHILD` style transition before
+  `SetParent`, with the existing transaction rollback covering failures.
+
+Local automated checks for this round PASS: `pnpm test` (13 files / 56
+tests), TypeScript/Vite build, release/version/secret gates, cargo fmt,
+Windows-target cargo check/test, and clippy with `-D warnings`. A Computer Use
+run on the rebuilt debug binary also created a Chrome group, added a second
+Chrome window through the controller, observed both HWNDs under the same host
+(inactive hidden, active visible), and restored both as top-level windows after
+host close. Public signed N→N+1 updater, physical mixed-DPI monitor matrix,
+and the full Windows 10 GUI verification remain **NOT RUN** and must not be
+inferred from these checks.
+
 The fixes require reviewer re-review before code approval is restored.
 
 ## Release automation follow-up

@@ -123,9 +123,9 @@ Approval
 
 ## Windows v1 architecture update
 
-実装の主設計は、当初の「タブバーを対象 window に追従させる」方式から、`SetParent` / `WS_CHILD` を使う integrated native group host 方式へ更新する。各 group は 1 つの枠なし top-level host を持ち、最上部に React tab strip、その下に active child window を表示する。inactive child は非表示にし、host を閉じる・解除する・アプリを終了する・updater を install する前には parent / style / exstyle / frame を復元する。
+実装の主設計は、当初の「タブバーを対象 window に追従させる」方式から、`SetParent` / `WS_CHILD` を使う integrated native group host 方式へ更新する。各 group は 1 つの枠なし top-level host を持ち、最上部に React tab strip、その下に active child window を表示する。inactive child は非表示にし、host を閉じる・解除する・アプリを終了する・updater を install する前には parent / style / exstyle / frame / visibility を復元する。host HWNDの作成はTauri main/event-loop threadへdispatchし、作成後に実HWNDのmixed-DPI hosting behaviorを検証する。
 
-この OS 境界をまたぐ mutation は snapshot → preflight → native mutation → registry commit の順に実行する。SetParent、style、size、visibility のいずれかが失敗した場合は rollback し、registry に部分的な ownership を commit しない。host / child の DPI context が無効、mixed-DPI hosting が利用不可、または権限境界で操作できない場合は fail closed とする。
+この OS 境界をまたぐ mutation は transaction開始時点のnative state / registry ownershipのsnapshot → preflight → `WS_CHILD` style変更 → `SetParent` → size/visibility → registry commit の順に実行する。いずれかが失敗した場合は transaction開始時点へ rollback し、registry に部分的な ownership を commit しない。host / child の DPI context が無効、実HWNDのmixed-DPI hostingが利用不可、または権限境界で操作できない場合は fail closed とする。
 
 ## Phase 0: Windows feasibility spike
 
@@ -147,7 +147,7 @@ Approval
 10. `Ctrl + 実ウィンドウ D&D` を検出できる
 11. D&D 中に drop target のトップレベルウィンドウを特定できる
 12. maximize / restore / Snap 後の frame を追跡できる
-13. mixed-DPI hosting の有効化と、unsupported window の fail-closed が成立する
+13. 実際に生成された host HWND の mixed-DPI hosting behavior 検証と、unsupported window の fail-closed が成立する
 
 ### Approach
 
@@ -168,6 +168,7 @@ Windows 10 で基本確認する。
 - group host が taskbar / Alt+Tab / Task View に 1 つだけ出る
 - tab click → active child の表示 / focus
 - group dissolve / app quit → child restore
+- restore failure → quit / updater install が中止され、controllerへエラーが表示される
 - SetParent / style / size の失敗を注入または観測し、partial group が残らない
 - maximize → restore
 - Windows 10: 通常の Snap
@@ -177,7 +178,7 @@ Windows 10 の実機確認を実行できない場合、Phase 0 を `BLOCKED: MA
 
 ### APPROVE
 
-- 1〜13 の結果が phase review に記録されている
+- 1〜13 の結果と、restore failure時のquit/install gate結果が phase review に記録されている
 - Windows 10 の基本検証が PASS
 - 不成立項目があれば先に仕様 / architecture を修正している
 - v1 を阻害する未解決制約がない

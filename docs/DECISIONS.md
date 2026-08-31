@@ -262,9 +262,9 @@ installer、updater artifact、signature、`latest.json` はpublic GitHub Releas
 
 Windows v1 では、各グループに 1 つの枠なし top-level native host を作る。React の tab strip と、対象アプリの active child window を同じ host frame に配置し、inactive child は非表示にする。`+`、tab D&D、グループ間移動、グループ解除は同じ `TabGroup` state と native host lifecycle に接続する。
 
-host へ組み込む前の対象は通常の top-level window として列挙する。組み込み時は host / child の DPI context と権限を preflight し、mixed-DPI hosting を有効化できない、または `SetParent` / style / size の変更が失敗する場合は組み込まない。native mutation は snapshot・rollback 付きで実行し、全操作が成功した後だけ registry ownership を commit する。
+host へ組み込む前の対象は通常の top-level window として列挙する。host HWNDはTauriの実際のnative window作成threadでmixed-DPI hostingを有効化した区間に生成し、生成後のHWND behaviorも検証する。組み込み時は host / child の DPI context と権限を preflight し、mixed-DPI hosting を有効化できない、または `SetParent` / style / size の変更が失敗する場合は組み込まない。styleは `WS_POPUP` を外して `WS_CHILD` を設定してから `SetParent` する。native mutation は transaction開始時点のnative state / registry ownership snapshotとrollback付きで実行し、全操作が成功した後だけ registry ownership を commit する。
 
-group host の終了、アプリ終了、Windows updater の install 直前には child を元の parent、style、exstyle、frame へ復元する。これにより、通常利用時は 1 group = 1 OS window の分かりやすい挙動を保ちつつ、外部アプリの描画とプロセスは維持する。
+group host の終了、アプリ終了、Windows updater の install 直前には child を元の parent、style、exstyle、frame、visibility へ復元する。復元に失敗した場合はtray quit / updater installを進めず、controllerへエラーを表示する。これにより、通常利用時は 1 group = 1 OS window の分かりやすい挙動を保ちつつ、外部アプリの描画とプロセスは維持する。
 
 ## 後から決めてよい事項
 

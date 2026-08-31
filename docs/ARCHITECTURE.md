@@ -67,7 +67,7 @@ launcher からプリセット選択、新規グループ、設定画面を開�
 
 プリセット内の接続済みウィンドウが 0 件でも、保存済み frame に group host の待機 frame を作成できるようにする。
 
-Windows v1 の group は、タブ strip と対象アプリの child window を同じ枠なし native host に持つ。対象アプリの描画プロセスは変えず、`SetParent` と `WS_CHILD` によって host の content 領域へ一時的に組み込む。active child だけを表示し、inactive child は非表示にする。解除・終了・更新前には保存した parent、style、exstyle、frame を復元する。
+Windows v1 の group は、タブ strip と対象アプリの child window を同じ枠なし native host に持つ。対象アプリの描画プロセスは変えず、`SetParent` と `WS_CHILD` によって host の content 領域へ一時的に組み込む。active child だけを表示し、inactive child は非表示にする。解除・終了・更新前には保存した parent、style、exstyle、frame、visibility を復元する。host の `HWND` は Tauri の main/event-loop thread 上で、`SetThreadDpiHostingBehavior(MIXED)` を有効にした作成区間に生成し、生成後の `GetWindowDpiHostingBehavior` でも実際の host が mixed であることを検証する。
 
 ## 共通モデル
 
@@ -212,9 +212,11 @@ focus イベントを受けた際は、対象ウィンドウを再度 activate �
 
 ### Group host transaction
 
-`SetParent`、window style、size/visibility の変更は 1 回の native transaction として扱う。対象 window の parent / style / exstyle / frame を先に snapshot し、preflight で host 自身、破棄済み HWND、DPI context、権限境界を検査する。途中の Win32 呼び出しが 1 つでも失敗した場合は、native state を snapshot へ戻してから registry を変更しない。rollback 自体に失敗した場合はエラーを表面化し、新しい group ownership を commit しない。
+`SetParent`、window style、size/visibility の変更は 1 回の native transaction として扱う。transaction開始時には、永続的な standalone 用 recovery snapshot とは別に、現在の parent / style / exstyle / frame / visibility と registry ownership を保存し、preflight で host 自身、破棄済み HWND、DPI context、権限境界を検査する。途中の Win32 呼び出しが 1 つでも失敗した場合は、その transaction 開始時点の native state と registry ownership へ戻してからエラーを返す。rollback 自体に失敗した場合は recovery record を残し、終了・更新を進めない。
 
-group host の終了、アプリ終了、Windows updater の install 直前も同じ restore path を使う。updater plugin が installer からプロセスを終了させるため、controller は install command の直前に対象 HWND の復元を完了させる。
+新しい child は `WS_POPUP` を外して `WS_CHILD` を設定し、frame change を適用してから `SetParent` する。native transaction が成功してからだけ workspace / registry の新しい ownership を公開する。
+
+group host の終了、アプリ終了、Windows updater の install 直前も同じ restore path を使う。updater plugin が installer からプロセスを終了させるため、controller は install command の直前に対象 HWND の復元を完了させ、復元が成功した場合だけ install を呼ぶ。tray quit も復元失敗時は終了せず、controller にエラーを表示する。
 
 ### DPI and unsupported windows
 

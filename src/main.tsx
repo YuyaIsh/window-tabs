@@ -455,6 +455,15 @@ function App() {
   }, []);
   useEffect(() => {
     if (!isController) return;
+    const unsubscribe = listen<string>("group-restore-failed", ({ payload }) => {
+      const message = `グループ化したウィンドウを復元できないため終了を中止しました。${payload}`;
+      recordDiagnostic("error", message);
+      setError(message);
+    });
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
+    if (!isController) return;
     const unsubscribe = listen<string>("launcher:apply-preset", ({ payload }) => {
       const preset = presets.find((item) => item.id === payload);
       if (preset) void applyPreset(preset);
@@ -582,10 +591,29 @@ function App() {
     }
     if (targetGroup && !targetCreatingGroup) {
       if (groupForWindow(workspaceRef.current, windowInfo.id)) return;
-      const anchorId = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId ?? targetGroup.tabs.find((tab) => tab.runtimeWindowId)?.runtimeWindowId;
-      const anchor = windows.find((item) => item.id === anchorId);
-      if (anchor && anchor.id !== windowInfo.id) { await setFrame(windowInfo.id, anchor.frame); await pinGroupTo(anchor.frame); }
-      setWorkspace((current) => addWindowToGroup(current, targetGroup.id, windowInfo));
+      try {
+        // Make the native side authoritative before publishing the new tab to
+        // secondary hosts.  Otherwise a failed SetParent could leave React
+        // showing a tab whose HWND is still standalone.
+        await windowBackend.openGroupHost(targetGroup.id);
+        const nextWorkspace = addWindowToGroup(workspaceRef.current, targetGroup.id, windowInfo);
+        const nextGroup = nextWorkspace.groups.find((item) => item.id === targetGroup.id);
+        if (!nextGroup) throw new Error("グループが見つかりません。");
+        const anchorId = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId ?? targetGroup.tabs.find((tab) => tab.runtimeWindowId)?.runtimeWindowId;
+        const anchor = windowsRef.current.find((item) => item.id === anchorId);
+        await windowBackend.syncGroupHost(
+          targetGroup.id,
+          nextGroup.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []),
+          nextGroup.tabs.find((tab) => tab.id === nextGroup.activeTabId)?.runtimeWindowId ?? null,
+          anchor?.frame ?? windowInfo.frame,
+        );
+        setWorkspace((current) => addWindowToGroup(current, targetGroup.id, windowInfo));
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : "このウィンドウをタブ内へ統合できませんでした。";
+        recordDiagnostic("error", message);
+        setError(message);
+        return;
+      }
     } else {
       await pinGroupTo(windowInfo.frame, displays.find((display) => display.id === windowInfo.displayId));
       const created = newGroup(windowInfo, normalizeFrame(windowInfo.frame, displays.find((display) => display.id === windowInfo.displayId)));
