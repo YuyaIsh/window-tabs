@@ -111,6 +111,27 @@ inferred from these checks.
 
 The fixes require reviewer re-review before code approval is restored.
 
+## Review round 9: native focus and ownership transaction follow-up
+
+The follow-up review identified missing child focus on tab selection, shortcut
+handling after focus moved into an external child, state-first ownership
+mutations, and the restore ordering around `SetParent`. The implementation now
+uses a dedicated native-worker `focus_group_tab` path with sibling visibility control,
+captures native browser-style shortcuts with a `WH_KEYBOARD_LL` hook, batches
+cross-group move / detach changes in one native transaction, performs release
+and dissolve native-first, and restores the saved parent before standalone
+styles and frame.
+
+Local automated checks for this round include Windows-target clippy with
+`-D warnings`, plus the existing frontend checks. Computer Use confirmed the
+rebuilt two-tab host and the selected external child focus state, and exercised
+tab creation and D&D reorder. The Computer Use key helper does not provide
+reliable low-level native keyboard-hook evidence; public signed N→N+1 updater, physical
+shortcut input, physical mixed-DPI monitor matrix, and full Windows 10 GUI
+verification remain **NOT RUN**.
+
+Result: **FIXED; RE-REVIEW REQUIRED**
+
 ## Release automation follow-up
 
 - The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.2`.

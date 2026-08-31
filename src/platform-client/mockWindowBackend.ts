@@ -20,6 +20,8 @@ export class MockWindowBackend implements WindowBackend {
   async closeWindow(id: WindowId) { this.windows = this.windows.filter((window) => window.id !== id); }
   async openGroupHost(groupId: string) { this.groupHosts.add(groupId); }
   async syncGroupHost(_groupId: string, _windowIds: WindowId[], _activeId: WindowId | null, _frame: Rect) {}
+  async syncGroupHosts(_requests: Array<{ groupId: string; windowIds: WindowId[]; activeId: WindowId | null; frame: Rect }>) {}
+  async focusGroupTab(_groupId: string, _windowId: WindowId) {}
   async closeGroupHost(groupId: string) { this.groupHosts.delete(groupId); }
   async raiseGroupHost(_groupId: string) {}
   async prepareUpdateInstall() {}

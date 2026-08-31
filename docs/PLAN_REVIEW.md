@@ -193,3 +193,39 @@ both top-level windows after host close. Windows 10 GUI, physical mixed-DPI,
 and public signed N→N+1 updater verification remain `NOT RUN`.
 
 Result: **FIXED; RE-REVIEW REQUIRED**
+
+## Review round 9: native focus and ownership transaction follow-up
+
+The next review found that a selected tab only raised the group host without
+focusing the selected child, that browser-style shortcuts stopped working once
+focus moved into the child process, and that move / detach / release / dissolve
+could publish workspace ownership before native mutation completed. It also
+found that restore applied top-level styles before reversing `SetParent`.
+
+The implementation now:
+
+- separates tab selection from layout synchronization and uses a dedicated
+  native-worker `focus_group_tab` path to hide siblings, show the selected
+  child, foreground the host, and focus the child without blocking the Tauri
+  command or stealing focus during passive sync;
+- captures Ctrl+Tab, Ctrl+1..9, Ctrl+W, F8, and Ctrl+Shift+A with a Windows
+  `WH_KEYBOARD_LL` hook on the native message thread so shortcuts remain
+  available while an external child owns focus, while passing unrelated
+  foreground input through;
+- batches cross-group move / detach native changes in one multi-host transaction
+  and commits React workspace ownership only after native success; release and
+  dissolve also close or resync the native host before changing state; and
+- restores `SetParent(saved.parent)` before restoring standalone styles and
+  frame state.
+
+Local automated checks for this round include Windows-target clippy with
+`-D warnings`, plus the existing frontend checks. Computer Use confirmed the
+rebuilt host contains the two test applications and that tab selection and
+child focus are represented in the host accessibility state; the rebuilt test
+run also exercised tab creation and D&D reorder. The `sky.press_key` helper
+does not reliably exercise the low-level native keyboard hook, so physical
+shortcut input remains manual evidence. Public signed N→N+1 updater, physical
+mixed-DPI monitor matrix, full Windows 10 GUI regression, and physical native
+shortcut input remain **NOT RUN** and must not be inferred from this run.
+
+Result: **FIXED; RE-REVIEW REQUIRED**

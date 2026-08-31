@@ -194,7 +194,15 @@ OS ごとの細かいイベント差は backend 内で正規化する。
 
 Windows は任意プロセスからの `SetForegroundWindow` を制限するため、タブクリックなど明示的なユーザー操作から呼ぶ経路を基本にする。
 
-focus イベントを受けた際は、対象ウィンドウを再度 activate せず、`activeTabId` だけ同期する。イベントループを防ぐ。
+タブ選択は full host sync と分離する。明示的な選択では `focus_group_tab` が
+専用の native worker で inactive child を隠し、host を前面化し、選択 child へ
+focus を渡す。通常の
+focus event を受けた際は対象ウィンドウを再度 activate せず、`activeTabId` だけ
+同期してイベントループを防ぐ。child に focus が移った後も Ctrl+Tab、Ctrl+1..9、
+Ctrl+W、F8、Ctrl+Shift+A が使えるよう、Windows backend の message thread が
+`WH_KEYBOARD_LL` で native shortcut を捕捉し、foreground host に属する group
+だけで入力を消費して通知する。対象外の foreground window では hook を必ず
+`CallNextHookEx` へ渡し、他アプリのショートカットを奪わない。
 
 ### 実ウィンドウ D&D
 
@@ -212,9 +220,9 @@ focus イベントを受けた際は、対象ウィンドウを再度 activate �
 
 ### Group host transaction
 
-`SetParent`、window style、size/visibility の変更は 1 回の native transaction として扱う。transaction開始時には、永続的な standalone 用 recovery snapshot とは別に、現在の parent / style / exstyle / frame / visibility と registry ownership を保存し、preflight で host 自身、破棄済み HWND、DPI context、権限境界を検査する。途中の Win32 呼び出しが 1 つでも失敗した場合は、その transaction 開始時点の native state と registry ownership へ戻してからエラーを返す。rollback 自体に失敗した場合は recovery record を残し、終了・更新を進めない。
+`SetParent`、window style、size/visibility の変更は 1 回の native transaction として扱う。複数 group にまたがる move / detach も 1 transaction にまとめ、transaction開始時には、永続的な standalone 用 recovery snapshot とは別に、現在の parent / style / exstyle / frame / visibility と registry ownership を保存し、preflight で host 自身、破棄済み HWND、DPI context、権限境界を検査する。途中の Win32 呼び出しが 1 つでも失敗した場合は、その transaction 開始時点の native state と registry ownership へ戻してからエラーを返す。workspace の ownership は native 成功後にだけ commit し、rollback 自体に失敗した場合は recovery record を残し、終了・更新を進めない。
 
-新しい child は `WS_POPUP` を外して `WS_CHILD` を設定し、frame change を適用してから `SetParent` する。native transaction が成功してからだけ workspace / registry の新しい ownership を公開する。
+新しい child は `WS_POPUP` を外して `WS_CHILD` を設定し、frame change を適用してから `SetParent` する。restore 時は先に `SetParent(saved.parent)` を戻してから top-level style / exstyle と frame を復元する。native transaction が成功してからだけ workspace / registry の新しい ownership を公開する。
 
 group host の終了、アプリ終了、Windows updater の install 直前も同じ restore path を使う。updater plugin が installer からプロセスを終了させるため、controller は install command の直前に対象 HWND の復元を完了させ、復元が成功した場合だけ install を呼ぶ。tray quit も復元失敗時は終了せず、controller にエラーを表示する。
 

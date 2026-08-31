@@ -125,7 +125,7 @@ Approval
 
 実装の主設計は、当初の「タブバーを対象 window に追従させる」方式から、`SetParent` / `WS_CHILD` を使う integrated native group host 方式へ更新する。各 group は 1 つの枠なし top-level host を持ち、最上部に React tab strip、その下に active child window を表示する。inactive child は非表示にし、host を閉じる・解除する・アプリを終了する・updater を install する前には parent / style / exstyle / frame / visibility を復元する。host HWNDの作成はTauri main/event-loop threadへdispatchし、作成後に実HWNDのmixed-DPI hosting behaviorを検証する。
 
-この OS 境界をまたぐ mutation は transaction開始時点のnative state / registry ownershipのsnapshot → preflight → `WS_CHILD` style変更 → `SetParent` → size/visibility → registry commit の順に実行する。いずれかが失敗した場合は transaction開始時点へ rollback し、registry に部分的な ownership を commit しない。host / child の DPI context が無効、実HWNDのmixed-DPI hostingが利用不可、または権限境界で操作できない場合は fail closed とする。
+この OS 境界をまたぐ mutation は、単一 group の追加だけでなく move / detach の複数 group を含め、transaction開始時点のnative state / registry ownershipのsnapshot → preflight → `WS_CHILD` style変更 → `SetParent` → size/visibility → registry commit の順に実行する。いずれかが失敗した場合は transaction開始時点へ rollback し、native 成功前に workspace / registry に部分的な ownership を commit しない。restore は `SetParent` を style 復元より先に行う。host / child の DPI context が無効、実HWNDのmixed-DPI hostingが利用不可、または権限境界で操作できない場合は fail closed とする。
 
 ## Phase 0: Windows feasibility spike
 
@@ -253,6 +253,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - integrated group host への組み込み（tab strip + active child）
 - child parent / style / frame の snapshot
 - GUI tab selection → activate
+- child focus 中も native `Ctrl+Tab` / `Ctrl+1..9` / `Ctrl+W` / `F8` を処理
 - group host / active child の foreground event → active tab sync
 - 1 tab でも tab bar を維持
 - explicit ungroup
@@ -269,12 +270,14 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - Task View / Alt+Tab / taskbar から group host を選択 → active tab sync
 - 3 → 2 → 1 tab でも bar 維持
 - minimize → tab select → restore
+- タブ選択で inactive child が隠れ、選択 child が表示・focus される
 - window close 後も他 group が正常
 
 ### APPROVE
 
 - D&D なしで中心フローを日常利用できる
 - activate と foreground event の loop がない
+- tab selection / shortcut が full host sync による focus steal を起こさない
 - multiple groups で focus / state が混線しない
 
 ## Phase 3: D&D and group lifecycle
@@ -297,6 +300,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - modifier なしの通常 move は無視
 - Chrome tab 分離だけでは自動追加しない
 - native group host の mutation は snapshot / rollback 付きで行う
+- move / detach / release / dissolve は native 成功後に workspace ownership を commit する
 
 ### Behavior verification
 
