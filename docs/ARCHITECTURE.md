@@ -65,7 +65,9 @@ launcher からプリセット選択、新規グループ、設定画面を開�
 
 初期 `main` WebViewは非表示のcontrollerとして、workspace mutation、native event、host lifecycleに加え、updater check/download/installを一意に所有する。secondary group hostはsnapshotを受け取りcommandをcontrollerへ送るだけで、updater pluginを直接呼ばない。
 
-プリセット内の接続済みウィンドウが 0 件でも、保存済み frame にタブバーだけを作成できるようにする。
+プリセット内の接続済みウィンドウが 0 件でも、保存済み frame に group host の待機 frame を作成できるようにする。
+
+Windows v1 の group は、タブ strip と対象アプリの child window を同じ枠なし native host に持つ。対象アプリの描画プロセスは変えず、`SetParent` と `WS_CHILD` によって host の content 領域へ一時的に組み込む。active child だけを表示し、inactive child は非表示にする。解除・終了・更新前には保存した parent、style、exstyle、frame を復元する。
 
 ## 共通モデル
 
@@ -181,6 +183,9 @@ OS ごとの細かいイベント差は backend 内で正規化する。
 - `SetWindowPos`: 位置・サイズ・Z order
 - `SetForegroundWindow`: 前面化
 - `ShowWindow`: 最小化解除
+- `SetParent`: 対象ウィンドウを group host へ組み込み / 復元
+- `SetWindowLongW`: `WS_CHILD` と frame style の変更 / 復元
+- `SetThreadDpiHostingBehavior(DPI_HOSTING_BEHAVIOR_MIXED)`: mixed-DPI child hosting の明示
 - monitor API: ディスプレイ処理
 - `SetWinEventHook`: focus、move/size、create、destroy などの監視
 - `WindowFromPoint` など: D&D 終了時の対象判定
@@ -205,6 +210,16 @@ focus イベントを受けた際は、対象ウィンドウを再度 activate �
 
 この方式で成立しないアプリだけがある場合に、より低レベルな pointer hook を検討する。
 
+### Group host transaction
+
+`SetParent`、window style、size/visibility の変更は 1 回の native transaction として扱う。対象 window の parent / style / exstyle / frame を先に snapshot し、preflight で host 自身、破棄済み HWND、DPI context、権限境界を検査する。途中の Win32 呼び出しが 1 つでも失敗した場合は、native state を snapshot へ戻してから registry を変更しない。rollback 自体に失敗した場合はエラーを表面化し、新しい group ownership を commit しない。
+
+group host の終了、アプリ終了、Windows updater の install 直前も同じ restore path を使う。updater plugin が installer からプロセスを終了させるため、controller は install command の直前に対象 HWND の復元を完了させる。
+
+### DPI and unsupported windows
+
+host と child の DPI awareness context が有効であること、host の hosting behavior が mixed であることを preflight で確認する。mixed-DPI hosting が使えない OS / window は組み込まず、候補一覧や UI ではエラーとして扱う。権限の異なるプロセスなど `SetParent` が失敗する境界も同じく fail closed とする。
+
 ### 最大化 / Snap
 
 通常 frame とは別に window state を取得する。
@@ -227,21 +242,22 @@ macOS では Accessibility 権限を前提とする。
 
 Space / ネイティブ全画面の操作は v1 共通仕様へ入れない。
 
-## タブバーウィンドウ
+## Integrated group host window
 
 React で描画する内容は共通にするが、ホストウィンドウの性質は platform 層で調整する。
 
 要求:
 
 - 枠なし
-- 対象ウィンドウ上端へ追従
-- タブをクリックしても不要にフォーカスを残さない
-- タスクバー / Alt+Tab / Task View / Mission Control の通常ウィンドウとして出さない
+- 最上部に React の tab strip、その下に active child window を置く
+- タブ選択で child の表示 / activation を切り替える
+- Windows では group host がタスクバー / Alt+Tab / Task View に 1 つの通常ウィンドウとして出る
+- host に組み込み中の child window は個別の OS window entry として重複表示しない
 - D&D 可能
 
-Windows と macOS で必要な native window flag が違うため、タブバー用 native host の設定を platform abstraction にする。
+Windows と macOS で必要な native window flag が違うため、group host の設定を platform abstraction にする。
 
-この要求が通常の Tauri window 設定だけで満たせない場合は、Web UI の描画は共通のまま native host だけ platform 固有実装にする。
+Windows の host は Tauri の WebView window と Win32 child hosting の境界を platform 層で実装する。macOS は Accessibility / AppKit の制約を踏まえ、host の Task View semantics を別途決める。Web UI の描画と group state は共通のままにする。
 
 ## Native window D&D
 
@@ -405,13 +421,14 @@ type PlatformCapabilities = {
 UI を作り込む前に、独立した小さい検証コードで次を確認する。
 
 1. `EnumWindows` から Chrome などの複数トップレベルウィンドウを安定して列挙できる
-2. 2 個以上を同一 frame に置いても Task View に個別表示される
-3. Task View / Alt+Tab から前面化された HWND を `SetWinEventHook` で検知できる
-4. タブバー host をタスクバー / Alt+Tab / Task View から除外できる
-5. タブバー操作後に対象ウィンドウへ自然に focus を戻せる
-6. Ctrl + native window move の start / end と drop target を安定して取得できる
-7. maximize / Snap Layouts 後に group frame を復元できる
-8. Windows 10 で上記が成立する
+2. 2 個以上を 1 つの group host に組み込み、tab strip と child window が同じ frame になる
+3. group host がタスクバー / Alt+Tab / Task View で 1 つの通常 window として扱われる
+4. host 終了時に child の parent / style / exstyle / frame を復元できる
+5. native mutation 失敗時に partial hosting を残さず transaction を rollback できる
+6. mixed-DPI hosting を有効化し、無効な DPI context や権限境界は fail closed にできる
+7. Ctrl + native window move の start / end と drop target を安定して取得できる
+8. maximize / Windows 10 standard Snap 後に group frame を復元できる
+9. Windows 10 で上記が成立する
 
 この spike が失敗した項目は、backend 実装で無理に隠さず仕様を修正する。
 
@@ -419,8 +436,8 @@ UI を作り込む前に、独立した小さい検証コードで次を確認�
 
 ### Phase 0: Windows spike
 
-- Task View / Alt+Tab
-- tab bar host
+- integrated group host / Task View / Alt+Tab
+- SetParent / rollback / mixed DPI
 - native window D&D
 - maximize / Snap
 

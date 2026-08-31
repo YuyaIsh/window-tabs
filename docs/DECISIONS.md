@@ -43,19 +43,19 @@ Windows だけなら別の選択肢もあるが、後から macOS を追加す�
 
 ## D-004: 実ウィンドウは埋め込まない
 
-**Status:** Accepted
+**Status:** Superseded by D-028
 
-別アプリのウィンドウを `window-tabs` の子ウィンドウとして取り込まない。
+対象アプリの描画を Web 化・再実装しない、という意味では維持する。ただし Windows v1 では、描画プロセスを変えずに `SetParent` と `WS_CHILD` で group host へ一時的に組み込む。
 
-対象ウィンドウは OS 上の通常ウィンドウのまま保持し、位置・サイズ・Z order を制御する。
+グループ解除・終了・更新前には元の parent、style、exstyle、frame を復元する。
 
 ## D-005: 非選択ウィンドウは画面外へ退避させない
 
-**Status:** Accepted
+**Status:** Superseded by D-028
 
-グループ内の全ウィンドウを同じ位置・サイズに置き、選択中だけ前面へ出す。
+group host 内では active child だけを表示し、非選択 child は非表示にする。画面外への退避や最小化で状態を隠す方式は採用しない。
 
-Task View / Mission Control では各実ウィンドウを個別に表示し、そこで選ばれたウィンドウを対応タブへ同期する。
+Windows の Task View / Alt+Tab / taskbar では group host を 1 つの作業単位として表示し、active tab と同期する。
 
 この挙動は Windows の spike で先に成立確認する。
 
@@ -160,11 +160,11 @@ frame はディスプレイ作業領域に対する割合で保存する。
 
 ## D-016: OS 標準のウィンドウ切り替えを置き換えない
 
-**Status:** Accepted
+**Status:** Superseded by D-028
 
 Task View、Alt+Tab、Mission Control、Command+Tab などは残す。
 
-管理対象ウィンドウが OS 標準操作で選択された場合に、`window-tabs` 側の active tab を同期する。
+Windows では group host を OS 標準操作の 1 つの選択単位として残し、選択された group host と active tab を同期する。組み込み中の child を個別の OS window として残すことは要求しない。
 
 ## D-017: macOS ネイティブ全画面 Space は v1 の対象外
 
@@ -188,7 +188,7 @@ macOS の full-screen Space 制御は platform 固有の追加機能として後
 
 **Status:** Accepted
 
-プリセット選択時に一致する実ウィンドウが 0 件でも、保存済み位置へ細いタブバーを表示する。
+プリセット選択時に一致する実ウィンドウが 0 件でも、保存済み位置へ group host の待機 frame を表示する。
 
 全タブを unresolved として保持し、対象ウィンドウが後から作られたら再照合する。
 
@@ -196,15 +196,16 @@ macOS の full-screen Space 制御は platform 固有の追加機能として後
 
 ## D-020: 本実装前に Windows 固有の成立条件を spike で確認する
 
-**Status:** Accepted
+**Status:** Superseded by D-028
 
 UI を作り込む前に次を確認する。
 
-- Task View に重なった管理対象ウィンドウが個別表示される
-- Task View / Alt+Tab からの focus を検知できる
-- タブバー host をタスクバー / Alt+Tab / Task View から除外できる
+- 複数ウィンドウを group host に組み込める
+- group host をタスクバー / Alt+Tab / Task View の 1 つの通常 window として扱える
+- host 終了時の child restore と native transaction rollback が成立する
+- mixed-DPI hosting と unsupported window の fail-closed が成立する
 - Ctrl + 実ウィンドウ D&D を安定して検知できる
-- 最大化 / Snap Layouts と frame 同期が共存できる
+- 最大化 / Windows 10 の標準 Snap と frame 同期が共存できる
 - Windows 10 で基本挙動が成立する
 
 失敗した項目は無理に実装で隠さず、先に仕様を修正する。
@@ -213,7 +214,7 @@ UI を作り込む前に次を確認する。
 
 **Status:** Accepted
 
-Windows の通常操作として maximize / Snap Layouts を使った後でもグループを維持する。
+Windows 10 の通常操作として maximize / standard Snap を使った後でもグループを維持する。
 
 最大化 state そのものを他タブへ同期するか、最終 frame だけを同期するかは spike の結果で決める。
 
@@ -254,6 +255,16 @@ installer、updater artifact、signature、`latest.json` はpublic GitHub Releas
 **Status:** Accepted
 
 初回public release前のproduction identifierを `io.github.yuyaish.window-tabs` とする。公開release後はinstaller identityとWebView/application dataの継続性を守るため、migration planなしに変更しない。pre-releaseの `local.window-tabs` に属するlocal dataは自動migration対象外とする。
+
+## D-028: Windows v1 は integrated native group host を採用する
+
+**Status:** Accepted
+
+Windows v1 では、各グループに 1 つの枠なし top-level native host を作る。React の tab strip と、対象アプリの active child window を同じ host frame に配置し、inactive child は非表示にする。`+`、tab D&D、グループ間移動、グループ解除は同じ `TabGroup` state と native host lifecycle に接続する。
+
+host へ組み込む前の対象は通常の top-level window として列挙する。組み込み時は host / child の DPI context と権限を preflight し、mixed-DPI hosting を有効化できない、または `SetParent` / style / size の変更が失敗する場合は組み込まない。native mutation は snapshot・rollback 付きで実行し、全操作が成功した後だけ registry ownership を commit する。
+
+group host の終了、アプリ終了、Windows updater の install 直前には child を元の parent、style、exstyle、frame へ復元する。これにより、通常利用時は 1 group = 1 OS window の分かりやすい挙動を保ちつつ、外部アプリの描画とプロセスは維持する。
 
 ## 後から決めてよい事項
 

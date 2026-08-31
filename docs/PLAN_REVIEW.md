@@ -146,3 +146,30 @@ scope and the existing manual-verification gates.
 Phase 6 now includes the NSIS installer, controller-owned signed Tauri updater, GitHub Release workflow, version/security gates, persistence smoke, and public-release verification. Distribution decisions use D-024 through D-027; D-022 and D-023 retain their existing meanings. Draft PR #1 is design input only and must be superseded rather than merged. Public-release and N→N+1 checks remain blocking manual evidence, not inferred PASS.
 
 Result: **APPROVED (plan); Phase 6 verification remains blocked**
+
+## Review round 7: integrated native group-host alignment
+
+The implementation changed the Windows v1 host model from a floating bar plus
+independent top-level windows to one integrated native group host. The old
+individual-Task-View and "host excluded" assertions were no longer valid.
+
+### Fixes
+
+- `SPEC.md` now defines the tab strip and active external child in one native
+  host, with inactive children hidden and child restore on dissolve / quit /
+  update.
+- `ARCHITECTURE.md` documents `SetParent` / `WS_CHILD`, mixed-DPI preflight,
+  checked native mutations, rollback, and updater restore ordering.
+- `DECISIONS.md` supersedes D-004, D-005, D-016, and D-020 with D-028.
+- `IMPLEMENTATION_PLAN.md` and phase reviews use the integrated-host
+  acceptance and verification matrix.
+- Application version is synchronized to `0.1.2` for the release-impacting
+  native changes.
+
+### Re-check state
+
+- Automated checks: pending rerun after implementation fix.
+- Windows GUI / public release / N→N+1 updater verification: still blocked
+  until observed on the target Windows 10 environment.
+
+Result: **FIXED; RE-REVIEW REQUIRED**

@@ -14,6 +14,7 @@ export interface WindowBackend {
   syncGroupHost(groupId: string, windowIds: WindowId[], activeId: WindowId | null, frame: Rect): Promise<void>;
   closeGroupHost(groupId: string): Promise<void>;
   raiseGroupHost(groupId: string): Promise<void>;
+  prepareUpdateInstall(): Promise<void>;
   showGroupMenu(groupId: string, items: Array<{ id: string; label: string; enabled: boolean }>): Promise<void>;
   setTrayPresets(presets: Array<{ id: string; name: string }>): Promise<void>;
 }
@@ -33,6 +34,7 @@ export const windowBackend: WindowBackend = {
   syncGroupHost: (groupId, windowIds, activeId, frame) => invoke("sync_group_host", { groupId, windowIds, activeId, frame }),
   closeGroupHost: (groupId) => invoke("close_group_host", { groupId }),
   raiseGroupHost: (groupId) => invoke("raise_group_host", { groupId }),
+  prepareUpdateInstall: () => invoke("prepare_update_install"),
   showGroupMenu: (groupId, items) => invoke("show_group_menu", { groupId, items }),
   setTrayPresets: (presets) => invoke("set_tray_presets", { presets }),
 };

@@ -9,7 +9,7 @@ Status: **IN_REVIEW; release acceptance remains BLOCKED: RELEASE VERIFICATION**
 - Windows x86_64 current-user NSIS bundle as the only formal v1 installer.
 - Tauri v2 updater plugin, controller-only capabilities, updater artifacts, passive Windows install, and public GitHub `latest.json` endpoint.
 - Controller-only startup/manual checks with a 60-second process cooldown.
-- User-separated check, download, install actions; on Windows the updater installer owns process exit/restart, with no polling or silent update.
+- User-separated check, download, install actions; on Windows the updater installer owns process exit/restart, with no polling or silent update. The controller restores all hosted child windows immediately before invoking install.
 - Update state/error UI, diagnostics, and Releases fallback.
 - PR CI without signing secrets and a main-push release-only signing workflow with automatically published GitHub Releases.
 - SemVer/config/tag checks and tracked-private-key scan.
@@ -17,9 +17,9 @@ Status: **IN_REVIEW; release acceptance remains BLOCKED: RELEASE VERIFICATION**
 
 ## Automated checks
 
-- `pnpm test` — PASS (13 files, 46 tests; updater cooldown/ownership/state/no-update/available/error/consent and release automation helpers included).
+- `pnpm test` — PASS (13 files, 56 tests; updater cooldown/ownership/state/no-update/available/error/consent and release automation helpers included).
 - `pnpm run build` — PASS (TypeScript and Vite production build).
-- `pnpm run check:release` — PASS for `0.1.1` (SemVer/config/identity/endpoint/NSIS/capability assumptions).
+- `pnpm run check:release` — PASS for `0.1.2` (SemVer/config/identity/endpoint/NSIS/capability assumptions).
 - Release-key fail-closed check — PASS; absent public key/private key/password rejects release configuration.
 - `pnpm run check:secrets` — PASS (126 tracked/untracked non-ignored repository files).
 - `actionlint 1.7.12 .github/workflows/*.yml` — PASS; downloaded archive checksum verified.
@@ -65,7 +65,7 @@ The following are **NOT RUN** and are not PASS:
 12. release workflow artifact reproduction;
 13. repository/release/log secret exposure review.
 
-Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previously recorded, including physical Ctrl D&D, Task View/Alt+Tab, Snap/maximize/restore, multiple groups, mixed DPI/display disconnect, preset reconnect, and tab D&D.
+Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previously recorded, including physical Ctrl D&D, integrated group-host Task View/Alt+Tab, Snap/maximize/restore, multiple groups, mixed DPI/display disconnect, preset reconnect, and tab D&D.
 
 ## Review findings
 
@@ -78,19 +78,24 @@ Phase 0–5 Windows GUI verification remains unchanged and NOT RUN where previou
 - P2 — The release-key preflight accepted an empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, as GitHub Actions maps a missing secret to an empty string. Fixed by rejecting missing and whitespace-only private keys/passwords.
 - P2 — Frontend updater code called the process-plugin relaunch after `install()`, although Windows updater installation exits the app itself. Fixed by removing the process plugin and delegating exit/restart to the Windows updater installer; the unit test now asserts only explicit download/install calls.
 - P2 — Docs implied that an unsigned installer could be built with normal `pnpm tauri build`. Fixed with the explicit `pnpm run build:unsigned` CI-equivalent script and documentation that normal builds require signing-key environment variables.
+- P1 — Grouped child windows could remain reparented when the Windows updater installer exited the process. Fixed with the controller-only `prepare_update_install` command, which restores every group immediately before `install()`; updater installer exit/restart remains its responsibility.
+- P1 — Cross-process hosting did not establish a DPI policy. Fixed with mixed-DPI hosting enablement and host/child DPI-context preflight; unsupported contexts fail closed before mutation.
+- P1 — `SetParent` / style / size mutations could leave partial native state. Fixed with snapshots, checked Win32 calls, rollback, and registry commit only after native success.
+- P2 — SPEC / ARCHITECTURE / IMPLEMENTATION_PLAN / phase evidence described the superseded floating-bar architecture. Updated them to document the integrated native group-host model and its restore / task-switcher semantics.
+- P2 — Release-impacting native changes had no version increment. Bumped synchronized application version from `0.1.1` to `0.1.2`.
 
 The fixes require reviewer re-review before code approval is restored.
 
 ## Release automation follow-up
 
-- The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.1`.
+- The repository's latest existing tag is `v0.1.0`; the synchronized application version for this change is `0.1.2`.
 - `.github/workflows/release.yml` now runs on `main` pushes only. It does not run from tag pushes or require a manual dispatch/tag. The production gate accepts only stable SemVer values; pre-release versions are rejected.
 - Before Release creation, a read-only main-push gate reuses the version/change helper and skips docs/README/comment/workflow-only pushes with no newer version. Release-impacting pushes require a newer stable SemVer, and pre-release versions are rejected. `actions/github-script` then atomically creates the version-derived tag at the current commit and a new marked draft Release with `GITHUB_TOKEN`; a final automatic step verifies all expected assets, rejects a candidate that is not newer than the highest published non-prerelease SemVer, and publishes it only after Tauri asset upload succeeds. It stops with a clear error for a tag on another commit, a different or incomplete published Release, or an unrecognized Release. A same-commit marked draft retry uses publish-only when complete and rebuilds only generated assets when partial; a completed automated Release is idempotent without modifying published assets.
 - The pinned `tauri-apps/tauri-action` SHA `1deb371b0cd8bd54025b384f1cd735e725c4060f` resolves to `action-v1.0.0`; `releaseId`, `tagName: v__VERSION__`, `releaseDraft: false`, `uploadUpdaterJson: true`, and `updaterJsonPreferNsis: true` preserve the updater artifact flow. The action builds and uploads assets for that immutable Release.
 - PR CI checks that release-impacting code/dependency changes increase the application version and use a stable SemVer; equal, lower, or pre-release versions are rejected. Documentation, README, and comment-only changes do not require a bump.
 - The release workflow uses a non-canceling concurrency group so queued `main` releases re-check the tag after the earlier release completes.
 
-Current unresolved P0/P1/P2: **0** after the latest review fixes, pending reviewer re-review.
+Current unresolved P0/P1/P2: **0** after the latest review fixes, pending reviewer re-review and manual release verification.
 
 ## Deferred
 

@@ -15,9 +15,13 @@ review remains blocked. This record is not an approval substitute.
   to a group, or move a tab between groups without relying on whichever group
   happened to be selected.
 - Tab reorder, explicit tab-to-group move, and detach-to-new-group UI paths.
-- Each additional group opens a separate compact native host window. Hosts use
-  an in-process `BroadcastChannel` only for live workspace synchronization;
-  the preset storage schema remains free of runtime IDs.
+- Each group opens one integrated native host window. The host owns the tab
+  strip and the active external child window; inactive children are hidden.
+  Hosts use an in-process `BroadcastChannel` only for live workspace
+  synchronization; the preset storage schema remains free of runtime IDs.
+- Native hosting snapshots parent/style/exstyle/frame, enables mixed-DPI
+  hosting, commits registry ownership only after all Win32 mutations succeed,
+  and restores children before dissolve, quit, and updater install.
 - Monitor enumeration, normalized group geometry, previous/next-display move,
   host-bar drag follow, display-disconnect fallback to the primary display,
   frame-settled synchronization, coalescing, and a one-second guard for
@@ -57,12 +61,13 @@ review remains blocked. This record is not an approval substitute.
 ## Still requiring Windows 10 verification
 
 - Physical Ctrl+D&D, cancel behavior, and drop targeting.
-- Task View, Alt+Tab, taskbar, tray, and foreground-loop behavior.
+- Group host behavior in Task View, Alt+Tab, taskbar, tray, and foreground-loop
+  behavior.
 - Two displays with mixed DPI, disconnect/reconnect, maximize, restore, and
   standard Windows 10 Snap.
 - Restart/reconnect with 0, one, and ambiguous preset candidates.
-- Two simultaneous group bars must remain bound to their stable group IDs while
-  focus changes; the controller is not a group host.
+- Two simultaneous integrated group hosts must remain bound to their stable
+  group IDs while focus changes; the controller is not a group host.
 - Cross-group tab moves, outside-bar tab release, later preset reconnect, and
   manual preset assignment must place the real window at the destination frame.
 
@@ -85,7 +90,8 @@ review remains blocked. This record is not an approval substitute.
 7. Dissolve a secondary-host group, or move its final tab into another group.
    Confirm its native host window closes rather than remaining as an empty bar.
 8. Create two groups and focus a native window in each. Confirm exactly two
-   bars remain, each bound to its original group, regardless of active focus.
+   integrated hosts remain, each bound to its original group, regardless of
+   active focus.
 9. Reconnect a preset candidate or manually assign an unresolved preset tab.
    Confirm the newly connected real window moves to that group's saved frame.
 10. Drop a tab outside every group bar. Confirm it is released from a
