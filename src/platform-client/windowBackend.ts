@@ -9,9 +9,14 @@ export interface WindowBackend {
   restore(id: WindowId): Promise<void>;
   getFrame(id: WindowId): Promise<Rect>;
   setFrame(id: WindowId, frame: Rect): Promise<void>;
+  closeWindow(id: WindowId): Promise<void>;
   openGroupHost(groupId: string): Promise<void>;
+  syncGroupHost(groupId: string, windowIds: WindowId[], activeId: WindowId | null, frame: Rect): Promise<void>;
+  syncGroupHosts(requests: Array<{ groupId: string; windowIds: WindowId[]; activeId: WindowId | null; frame: Rect }>): Promise<void>;
+  focusGroupTab(groupId: string, windowId: WindowId): Promise<void>;
   closeGroupHost(groupId: string): Promise<void>;
   raiseGroupHost(groupId: string): Promise<void>;
+  prepareUpdateInstall(): Promise<void>;
   showGroupMenu(groupId: string, items: Array<{ id: string; label: string; enabled: boolean }>): Promise<void>;
   setTrayPresets(presets: Array<{ id: string; name: string }>): Promise<void>;
 }
@@ -26,9 +31,14 @@ export const windowBackend: WindowBackend = {
   restore: (id) => invoke("restore_window", { id }),
   getFrame: (id) => invoke("get_window_frame", { id }),
   setFrame: (id, frame) => invoke("set_window_frame", { id, frame }),
+  closeWindow: (id) => invoke("close_window", { id }),
   openGroupHost: (groupId) => invoke("open_group_host", { groupId }),
+  syncGroupHost: (groupId, windowIds, activeId, frame) => invoke("sync_group_host", { groupId, windowIds, activeId, frame }),
+  syncGroupHosts: (requests) => invoke("sync_group_hosts", { requests }),
+  focusGroupTab: (groupId, windowId) => invoke("focus_group_tab", { groupId, windowId }),
   closeGroupHost: (groupId) => invoke("close_group_host", { groupId }),
   raiseGroupHost: (groupId) => invoke("raise_group_host", { groupId }),
+  prepareUpdateInstall: () => invoke("prepare_update_install"),
   showGroupMenu: (groupId, items) => invoke("show_group_menu", { groupId, items }),
   setTrayPresets: (presets) => invoke("set_tray_presets", { presets }),
 };

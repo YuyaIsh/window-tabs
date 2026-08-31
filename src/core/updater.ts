@@ -1,4 +1,4 @@
-import { check } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
 
 export const UPDATE_CHECK_COOLDOWN_MS = 60_000;
 
@@ -35,14 +35,14 @@ export type UpdateRuntime = {
 
 const runtime: UpdateRuntime = {
   async check() {
-    const update = await check();
+    const update = await invoke<{ currentVersion: string; version: string; body?: string } | null>("check_app_update");
     if (!update) return null;
     return {
       currentVersion: update.currentVersion,
       version: update.version,
       notes: update.body,
-      download: () => update.download(),
-      install: () => update.install(),
+      download: () => invoke("download_app_update"),
+      install: () => invoke("install_app_update"),
     };
   },
 };

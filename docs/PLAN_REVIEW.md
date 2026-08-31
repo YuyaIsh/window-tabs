@@ -146,3 +146,86 @@ scope and the existing manual-verification gates.
 Phase 6 now includes the NSIS installer, controller-owned signed Tauri updater, GitHub Release workflow, version/security gates, persistence smoke, and public-release verification. Distribution decisions use D-024 through D-027; D-022 and D-023 retain their existing meanings. Draft PR #1 is design input only and must be superseded rather than merged. Public-release and N→N+1 checks remain blocking manual evidence, not inferred PASS.
 
 Result: **APPROVED (plan); Phase 6 verification remains blocked**
+
+## Review round 7: integrated native group-host alignment
+
+The implementation changed the Windows v1 host model from a floating bar plus
+independent top-level windows to one integrated native group host. The old
+individual-Task-View and "host excluded" assertions were no longer valid.
+
+### Fixes
+
+- `SPEC.md` now defines the tab strip and active external child in one native
+  host, with inactive children hidden and child restore on dissolve / quit /
+  update.
+- `ARCHITECTURE.md` documents `SetParent` / `WS_CHILD`, mixed-DPI preflight,
+  checked native mutations, rollback, and updater restore ordering.
+- `DECISIONS.md` supersedes D-004, D-005, D-016, and D-020 with D-028.
+- `IMPLEMENTATION_PLAN.md` and phase reviews use the integrated-host
+  acceptance and verification matrix.
+- Application version is synchronized to `0.1.2` for the release-impacting
+  native changes.
+
+### Re-check state
+
+- Automated checks: pending rerun after implementation fix.
+- Windows GUI / public release / N→N+1 updater verification: still blocked
+  until observed on the target Windows 10 environment.
+
+Result: **FIXED; RE-REVIEW REQUIRED**
+
+## Review round 8: native host safety follow-up
+
+The follow-up review identified four issues in the integrated-host changes:
+the actual host HWND was not proven to carry mixed-DPI hosting behavior, abort
+rollback used the persistent standalone snapshots instead of transaction-start
+state, updater/quit could continue after a failed restore, and the `SetParent`
+style order was reversed. The implementation now dispatches host creation to
+the Tauri main/event-loop thread, verifies the created HWND with
+`GetWindowDpiHostingBehavior`, keeps native transaction snapshots separate from
+recovery records, gates updater install and tray quit on successful restore,
+and applies `WS_CHILD` before `SetParent`.
+
+Automated checks: local rerun PASS (frontend tests/build, release gates,
+Windows-target fmt/check/test/clippy). Computer Use also confirmed the rebuilt
+debug binary can add a second Chrome HWND under the existing host and restore
+both top-level windows after host close. Windows 10 GUI, physical mixed-DPI,
+and public signed N→N+1 updater verification remain `NOT RUN`.
+
+Result: **FIXED; RE-REVIEW REQUIRED**
+
+## Review round 9: native focus and ownership transaction follow-up
+
+The next review found that a selected tab only raised the group host without
+focusing the selected child, that browser-style shortcuts stopped working once
+focus moved into the child process, and that move / detach / release / dissolve
+could publish workspace ownership before native mutation completed. It also
+found that restore applied top-level styles before reversing `SetParent`.
+
+The implementation now:
+
+- separates tab selection from layout synchronization and uses a dedicated
+  native-worker `focus_group_tab` path to hide siblings, show the selected
+  child, foreground the host, and focus the child without blocking the Tauri
+  command or stealing focus during passive sync;
+- captures Ctrl+Tab, Ctrl+1..9, Ctrl+W, F8, and Ctrl+Shift+A with a Windows
+  `WH_KEYBOARD_LL` hook on the native message thread so shortcuts remain
+  available while an external child owns focus, while passing unrelated
+  foreground input through;
+- batches cross-group move / detach native changes in one multi-host transaction
+  and commits React workspace ownership only after native success; release and
+  dissolve also close or resync the native host before changing state; and
+- restores `SetParent(saved.parent)` before restoring standalone styles and
+  frame state.
+
+Local automated checks for this round include Windows-target clippy with
+`-D warnings`, plus the existing frontend checks. Computer Use confirmed the
+rebuilt host contains the two test applications and that tab selection and
+child focus are represented in the host accessibility state; the rebuilt test
+run also exercised tab creation and D&D reorder. The `sky.press_key` helper
+does not reliably exercise the low-level native keyboard hook, so physical
+shortcut input remains manual evidence. Public signed N→N+1 updater, physical
+mixed-DPI monitor matrix, full Windows 10 GUI regression, and physical native
+shortcut input remain **NOT RUN** and must not be inferred from this run.
+
+Result: **FIXED; RE-REVIEW REQUIRED**

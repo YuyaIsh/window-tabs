@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { emit, listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { newGroup, selectTab, ungroupWindow } from "./core/groups";
-import { calculateTabBarFrame, fitFrameToWorkArea, TAB_BAR_LOGICAL_HEIGHT } from "./core/geometry";
+import { newGroup, selectTab } from "./core/groups";
+import { fitFrameToWorkArea, TAB_BAR_LOGICAL_HEIGHT } from "./core/geometry";
 import { applyNativeDrop, applyWorkspaceCommand } from "./core/controller";
 import { reconnectGroupExcluding } from "./core/matching";
 import { diagnostics, recordDiagnostic } from "./core/diagnostics";
@@ -28,6 +29,7 @@ const isController = ownsUpdater(hostGroupId);
 const OVERLAY_HEIGHT = 640;
 const RELEASES_URL = "https://github.com/YuyaIsh/window-tabs/releases";
 type TabDragSession = { groupId: string; tabId: string };
+type GlobalTabShortcut = { groupId: string; key: number; ctrl: boolean; shift: boolean };
 type ControllerCommand =
   | { type: "open-picker"; groupId?: string; creatingGroup?: boolean }
   | { type: "open-preset-manager" }
@@ -47,6 +49,7 @@ type ControllerCommand =
   | { type: "set-preset-matcher"; presetId: string; tabIndex: number; titlePattern: string }
   | { type: "apply-preset"; presetId: string }
   | { type: "host-moved"; groupId: string; x: number; contentY: number }
+  | { type: "host-resized"; groupId: string; width: number; height: number }
   | { type: "dissolve-group"; groupId: string };
 
 const normalizeFrame = (frame: WindowInfo["frame"], display: DisplayInfo | undefined) => !display ? { x: 0.1, y: 0.1, width: 0.8, height: 0.8 } : { x: (frame.x - display.workArea.x) / display.workArea.width, y: (frame.y - display.workArea.y) / display.workArea.height, width: frame.width / display.workArea.width, height: frame.height / display.workArea.height };
@@ -89,6 +92,7 @@ function App() {
   const workspaceSynced = useRef(!hostGroupId);
   const suppressWorkspaceBroadcast = useRef(false);
   const hostedGroupIds = useRef(new Set<string>());
+  const hostSyncChain = useRef<Promise<void>>(Promise.resolve());
   const controllerCommandHandler = useRef<(command: ControllerCommand) => void>();
   const tabDropHandled = useRef(false);
   const tabDragCancelled = useRef(false);
@@ -102,35 +106,58 @@ function App() {
     try { await windowBackend.setFrame(id, frame); }
     catch (reason) { const message = reason instanceof Error ? reason.message : "ウィンドウの配置を更新できませんでした。"; pendingFrameMutations.current.delete(id); recordDiagnostic("error", message); setError(message); }
   };
-  const pinBarTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
+  const pinGroupTo = async (frame: WindowInfo["frame"], display?: DisplayInfo) => {
     if (isController) return;
     const appWindow = getCurrentWindow();
     const initialScale = await appWindow.scaleFactor();
     let physicalHeight = Math.round(TAB_BAR_LOGICAL_HEIGHT * initialScale);
-    let bar = calculateTabBarFrame(frame, physicalHeight, display);
-    pinnedHostPositions.current.set(hostPositionKey(bar.x, bar.y), Date.now() + 1_000);
-    await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
+    let hostY = display ? Math.max(display.workArea.y, frame.y - physicalHeight) : frame.y - physicalHeight;
+    pinnedHostPositions.current.set(hostPositionKey(frame.x, hostY), Date.now() + 1_000);
+    await appWindow.setPosition(new PhysicalPosition(frame.x, hostY));
     const destinationScale = await appWindow.scaleFactor();
     const destinationHeight = Math.round(TAB_BAR_LOGICAL_HEIGHT * destinationScale);
     if (destinationHeight !== physicalHeight) {
       physicalHeight = destinationHeight;
-      bar = calculateTabBarFrame(frame, physicalHeight, display);
-      pinnedHostPositions.current.set(hostPositionKey(bar.x, bar.y), Date.now() + 1_000);
+      hostY = display ? Math.max(display.workArea.y, frame.y - physicalHeight) : frame.y - physicalHeight;
+      pinnedHostPositions.current.set(hostPositionKey(frame.x, hostY), Date.now() + 1_000);
     }
     hostPhysicalHeight.current = physicalHeight;
-    await appWindow.setSize(new PhysicalSize(bar.width, physicalHeight));
-    await appWindow.setPosition(new PhysicalPosition(bar.x, bar.y));
+    const maxHeight = display ? display.workArea.y + display.workArea.height - hostY : frame.height + physicalHeight;
+    await appWindow.setSize(new PhysicalSize(frame.width, Math.max(physicalHeight + 1, Math.min(frame.height + physicalHeight, maxHeight))));
+    await appWindow.setPosition(new PhysicalPosition(frame.x, hostY));
     await appWindow.show();
     if (group) {
-      void windowBackend.raiseGroupHost(group.id).catch(() => undefined);
-      const contentY = bar.y + physicalHeight;
-      if (contentY > frame.y) sendCommand({ type: "host-moved", groupId: group.id, x: bar.x, contentY });
+      const connected = group.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []);
+      const active = group.tabs.find((tab) => tab.id === group.activeTabId)?.runtimeWindowId ?? null;
+      await queueHostSync(group.id, connected, picker ? null : active, frame);
+      const contentY = hostY + physicalHeight;
+      if (contentY > frame.y) sendCommand({ type: "host-moved", groupId: group.id, x: frame.x, contentY });
     }
   };
   const sendCommand = (command: ControllerCommand) => { void emit("workspace-command", command).catch(() => undefined); };
+  const queueHostSync = (groupId: string, windowIds: string[], activeId: string | null, frame: WindowInfo["frame"]) => {
+    hostSyncChain.current = hostSyncChain.current.catch(() => undefined).then(() => windowBackend.syncGroupHost(groupId, windowIds, activeId, frame)).catch((reason) => {
+      const message = reason instanceof Error ? reason.message : "このウィンドウをタブ内へ統合できませんでした。";
+      recordDiagnostic("error", message);
+      setError(message);
+    });
+    return hostSyncChain.current;
+  };
+  const hostSyncRequest = (item: TabGroup) => {
+    const display = displaysRef.current.find((candidate) => candidate.id === item.displayId) ?? displaysRef.current.find((candidate) => candidate.primary);
+    return {
+      groupId: item.id,
+      windowIds: item.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []),
+      activeId: item.tabs.find((tab) => tab.id === item.activeTabId)?.runtimeWindowId ?? null,
+      frame: display ? denormalizeFrame(item.frame, display) : { x: 0, y: 0, width: 1, height: 1 },
+    };
+  };
   const openWindowPicker = () => {
     if (!isController) {
-      sendCommand({ type: "open-picker", groupId: group?.id });
+      if (!group) return;
+      setPickerContext(groupPickerContext(group.id));
+      void refresh();
+      setPicker(true);
       return;
     }
     const target = activeOrLatestGroup(workspaceRef.current);
@@ -146,19 +173,6 @@ function App() {
   const startHostDrag = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !(event.target instanceof HTMLElement) || event.target.closest("button, [draggable='true']")) return;
     void getCurrentWindow().startDragging().catch(() => undefined);
-  };
-  const startGroupHandleDrag = (event: MouseEvent<HTMLButtonElement>) => {
-    if (event.button === 0) void getCurrentWindow().startDragging().catch(() => undefined);
-  };
-  const moveGroupHandleByKey = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    if (!group || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-    event.preventDefault();
-    const delta = event.shiftKey ? 50 : 10;
-    void getCurrentWindow().outerPosition().then((position) => {
-      const x = position.x + (event.key === "ArrowLeft" ? -delta : event.key === "ArrowRight" ? delta : 0);
-      const y = position.y + (event.key === "ArrowUp" ? -delta : event.key === "ArrowDown" ? delta : 0);
-      sendCommand({ type: "host-moved", groupId: group.id, x, contentY: y + hostPhysicalHeight.current });
-    }).catch(() => undefined);
   };
   const beginTabDrag = (event: DragEvent<HTMLButtonElement>, tabId: string) => {
     if (!group) return;
@@ -197,6 +211,19 @@ function App() {
     if (manual) setUpdateOpen(true);
     void updater.current.check(applyUpdateState);
   };
+  const installUpdate = async () => {
+    if (!updater.current) return;
+    try {
+      // The Windows updater exits the process from its own installer. Restore
+      // hosted HWNDs immediately before crossing that boundary.
+      await windowBackend.prepareUpdateInstall();
+      await updater.current.install(applyUpdateState);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "更新前にグループ化したウィンドウを復元できませんでした。";
+      recordDiagnostic("error", message);
+      setError(message);
+    }
+  };
   const toggleGroupMenu = () => {
     setMenuOpen((expanded) => !expanded);
   };
@@ -210,7 +237,7 @@ function App() {
       { id: `${prefix}rename`, label: "選択タブの名前を変更…", enabled: Boolean(group.activeTabId) },
       { id: `${prefix}previous-display`, label: "前の画面へ", enabled: displays.length > 1 },
       { id: `${prefix}next-display`, label: "次の画面へ", enabled: displays.length > 1 },
-      { id: `${prefix}detach`, label: "選択タブを新しいグループへ", enabled: Boolean(group.activeTabId) },
+      { id: `${prefix}release`, label: "選択タブをグループから外す", enabled: Boolean(group.activeTabId) },
       { id: `${prefix}dissolve`, label: "グループを解除", enabled: true },
       { id: `${prefix}presets`, label: "プリセットを管理…", enabled: true },
       { id: `${prefix}diagnostics`, label: "診断ログを表示…", enabled: true },
@@ -235,7 +262,9 @@ function App() {
   };
   const startNewGroup = () => {
     if (!isController) {
-      sendCommand({ type: "open-picker", creatingGroup: true });
+      setPickerContext(newGroupPickerContext());
+      void refresh();
+      setPicker(true);
       return;
     }
     setPickerContext(newGroupPickerContext()); void refresh(); setPicker(true);
@@ -249,8 +278,6 @@ function App() {
     const targetWindowId = targetTab?.runtimeWindowId;
     if (targetWindowId) void (async () => {
       try {
-        if (targetTab?.status === "minimized") await windowBackend.restore(targetWindowId);
-        await windowBackend.activate(targetWindowId);
         await windowBackend.raiseGroupHost(groupId);
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : "ウィンドウを前面化できませんでした。";
@@ -316,15 +343,20 @@ function App() {
   }, [picker, presetManager, diagnosticsOpen, updateOpen]);
   useEffect(() => {
     const overlayOpen = picker || presetManager || diagnosticsOpen || updateOpen;
-    if (overlayOpen) { void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT)); return; }
+    if (isController) {
+      if (overlayOpen) void getCurrentWindow().setSize(new LogicalSize(720, OVERLAY_HEIGHT));
+      return;
+    }
     if (group) {
       const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
-      if (display) { void pinBarTo(denormalizeFrame(group.frame, display), display); return; }
+      if (display) void (async () => {
+        await pinGroupTo(denormalizeFrame(group.frame, display), display);
+        const size = await getCurrentWindow().innerSize();
+        await getCurrentWebview().setSize(new PhysicalSize(size.width, overlayOpen ? size.height : hostPhysicalHeight.current));
+      })();
+      return;
     }
-    const connected = group?.tabs.map((tab) => tab.runtimeWindowId).find(Boolean);
-    const windowInfo = windows.find((item) => item.id === connected);
-    if (windowInfo) { void pinBarTo(windowInfo.frame, displays.find((item) => item.id === windowInfo.displayId)); return; }
-    void getCurrentWindow().setSize(new LogicalSize(720, TAB_BAR_LOGICAL_HEIGHT));
+    void getCurrentWebview().setSize(new LogicalSize(720, TAB_BAR_LOGICAL_HEIGHT));
   }, [group, picker, presetManager, diagnosticsOpen, updateOpen, menuOpen, windows, displays]);
   useEffect(() => {
     const started = listen<TabDragSession>("tab-drag-start", ({ payload }) => setTabDrag(payload));
@@ -337,12 +369,12 @@ function App() {
     const action = listen<string>("group-menu-action", ({ payload }) => {
       const [groupId, command, argument] = payload.split("|");
       if (groupId !== group.id) return;
-      if (command === "new") sendCommand({ type: "open-picker", creatingGroup: true });
+      if (command === "new") startNewGroup();
       if (command === "save") sendCommand({ type: "save-preset", groupId });
       if (command === "rename" && group.activeTabId) sendCommand({ type: "rename-tab", groupId, tabId: group.activeTabId });
       if (command === "previous-display") sendCommand({ type: "move-display", groupId, direction: -1 });
       if (command === "next-display") sendCommand({ type: "move-display", groupId, direction: 1 });
-      if (command === "detach" && group.activeTabId) sendCommand({ type: "detach-tab", groupId, tabId: group.activeTabId });
+      if (command === "release" && group.activeTabId) sendCommand({ type: "release-tab", groupId, tabId: group.activeTabId });
       if (command === "dissolve") sendCommand({ type: "dissolve-group", groupId });
       if (command === "presets") sendCommand({ type: "open-preset-manager" });
       if (command === "diagnostics") sendCommand({ type: "open-diagnostics" });
@@ -353,9 +385,47 @@ function App() {
     return () => { void action.then((dispose) => dispose()); };
   }, [group, workspace.groups, presets, displays]);
   useEffect(() => {
+    if (!isController) return;
+    const unsubscribe = listen<GlobalTabShortcut>("global-tab-shortcut", ({ payload }) => {
+      const targetGroup = workspaceRef.current.groups.find((item) => item.id === payload.groupId);
+      if (!targetGroup) return;
+      if (payload.ctrl && payload.key === 9 && targetGroup.tabs.length) {
+        const currentIndex = Math.max(0, targetGroup.tabs.findIndex((tab) => tab.id === targetGroup.activeTabId));
+        const offset = payload.shift ? -1 : 1;
+        const target = targetGroup.tabs[(currentIndex + offset + targetGroup.tabs.length) % targetGroup.tabs.length];
+        void select(target.id, targetGroup.id);
+        return;
+      }
+      if (payload.ctrl && payload.key >= 0x31 && payload.key <= 0x39) {
+        const target = targetGroup.tabs[payload.key - 0x31];
+        if (target) void select(target.id, targetGroup.id);
+        return;
+      }
+      if (payload.ctrl && payload.key === 0x57) {
+        if (targetGroup.activeTabId) void releaseTab(targetGroup.id, targetGroup.activeTabId);
+        return;
+      }
+      if (payload.key === 0x77 || (payload.ctrl && payload.shift && payload.key === 0x41)) {
+        setWorkspace((current) => selectGroup(current, targetGroup.id));
+        setPickerContext(groupPickerContext(targetGroup.id));
+        void refresh();
+        setPicker(true);
+      }
+    });
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
+    if (!isController) return;
+    const unsubscribe = listen<string>("group-focus-failed", ({ payload }) => {
+      recordDiagnostic("error", payload);
+      setError(payload);
+    });
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
     if (!hostGroupId || !group || menuOpen) return;
     const display = displays.find((item) => item.id === group.displayId) ?? displays.find((item) => item.primary);
-    if (display) void pinBarTo(denormalizeFrame(group.frame, display), display);
+    if (display) void pinGroupTo(denormalizeFrame(group.frame, display), display);
   }, [group?.id, hostGroupId, windows, menuOpen]);
   useEffect(() => {
     if (!isController) return;
@@ -366,12 +436,13 @@ function App() {
     for (const item of missing) {
       const frame = denormalizeFrame(item.frame, primary);
       for (const tab of item.tabs) if (tab.runtimeWindowId) void setFrame(tab.runtimeWindowId, frame);
-      if (item.id === group?.id) void pinBarTo(frame);
+      if (item.id === group?.id) void pinGroupTo(frame);
     }
     setWorkspace((current) => ({ ...current, groups: current.groups.map((item) => !displays.some((display) => display.id === item.displayId) ? { ...item, displayId: primary.id } : item) }));
   }, [displays, workspace.groups, group?.id]);
   useEffect(() => {
-    let dispose: (() => void) | undefined;
+    let disposeMoved: (() => void) | undefined;
+    let disposeResized: (() => void) | undefined;
     void getCurrentWindow().onMoved(({ payload }) => {
       if (!group) return;
       if (!isController) {
@@ -388,9 +459,21 @@ function App() {
       const destination = denormalizeFrame({ ...normalizeFrame(frame, display), width: group.frame.width, height: group.frame.height }, display);
       for (const tab of group.tabs) if (tab.runtimeWindowId) void setFrame(tab.runtimeWindowId, destination);
       setWorkspace((current) => ({ ...current, groups: current.groups.map((item) => item.id === group.id ? { ...item, displayId: display.id, frame: normalizeFrame(destination, display) } : item) }));
-    }).then((unlisten) => { dispose = unlisten; });
-    return () => dispose?.();
-  }, [group, displays]);
+    }).then((unlisten) => { disposeMoved = unlisten; });
+    void getCurrentWindow().onResized(({ payload }) => {
+      if (!group || isController) return;
+      sendCommand({ type: "host-resized", groupId: group.id, width: payload.width, height: Math.max(1, payload.height - hostPhysicalHeight.current) });
+      const connected = group.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []);
+      const active = group.tabs.find((tab) => tab.id === group.activeTabId)?.runtimeWindowId ?? null;
+      void getCurrentWindow().outerPosition().then((position) => queueHostSync(group.id, connected, picker ? null : active, {
+        x: position.x,
+        y: position.y + hostPhysicalHeight.current,
+        width: payload.width,
+        height: Math.max(1, payload.height - hostPhysicalHeight.current),
+      }));
+    }).then((unlisten) => { disposeResized = unlisten; });
+    return () => { disposeMoved?.(); disposeResized?.(); };
+  }, [group, displays, picker]);
   useEffect(() => {
     if (!isController) return;
     savePresets(presets);
@@ -409,6 +492,22 @@ function App() {
   useEffect(() => {
     if (!isController) return;
     const unsubscribe = listen("launcher:check-updates", () => checkForUpdates(true));
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
+    if (!isController) return;
+    const unsubscribe = listen<string>("group-close-requested", ({ payload }) => {
+      void dissolveGroupWithNative(payload);
+    });
+    return () => { void unsubscribe.then((dispose) => dispose()); };
+  }, []);
+  useEffect(() => {
+    if (!isController) return;
+    const unsubscribe = listen<string>("group-restore-failed", ({ payload }) => {
+      const message = `グループ化したウィンドウを復元できないため終了を中止しました。${payload}`;
+      recordDiagnostic("error", message);
+      setError(message);
+    });
     return () => { void unsubscribe.then((dispose) => dispose()); };
   }, []);
   useEffect(() => {
@@ -450,22 +549,16 @@ function App() {
           if (!owner || owner.activeTabId !== owner.tabs.find((tab) => tab.runtimeWindowId === payload.id)?.id) return current;
           for (const tab of owner.tabs) if (tab.runtimeWindowId && tab.runtimeWindowId !== payload.id) void setFrame(tab.runtimeWindowId, frame);
           const display = displayForFrame(frame, displays);
-          if (owner.id === workspaceRef.current.activeGroupId) void pinBarTo(frame, display);
+          if (owner.id === workspaceRef.current.activeGroupId) void pinGroupTo(frame, display);
           return { ...current, groups: current.groups.map((item) => item.id === owner.id ? { ...item, displayId: display?.id ?? item.displayId, frame: normalizeFrame(frame, display) } : item) };
         }), 150);
         settledFrameTimers.current.set(payload.id, timer);
       }
-      if (payload.kind === "drag-end" && payload.target) setWorkspace((current) => {
-        const source = windows.find((window) => window.id === payload.id); const target = windows.find((window) => window.id === payload.target);
-        if (!source || !target) return current;
-        const targetDisplay = displays.find((item) => item.id === target.displayId);
-        const next = applyNativeDrop(current, source, target, normalizeFrame(target.frame, targetDisplay));
-        const owner = groupForWindow(next, source.id) ?? groupForWindow(next, target.id);
-        const display = (owner && displays.find((item) => item.id === owner.displayId)) ?? displays.find((item) => item.primary);
-        const frame = owner && display ? denormalizeFrame(owner.frame, display) : source.frame;
-        for (const tab of owner?.tabs ?? []) if (tab.runtimeWindowId) void setFrame(tab.runtimeWindowId, frame);
-        return next;
-      });
+      if (payload.kind === "drag-end" && payload.target) {
+        const source = windows.find((window) => window.id === payload.id);
+        const target = windows.find((window) => window.id === payload.target);
+        if (source && target) void handleNativeDrop(source, target);
+      }
       if (payload.kind === "drag-end") setNativeDragId(null);
     });
     return () => { void unsubscribe.then((dispose) => dispose()); };
@@ -504,15 +597,30 @@ function App() {
 
   const select = async (tabId: string, groupId = group?.id) => {
     if (!groupId) return;
-    if (!isController) { sendCommand({ type: "select-tab", groupId, tabId }); return; }
+    if (!isController) {
+      const target = group?.tabs.find((tab) => tab.id === tabId);
+      if (!target?.runtimeWindowId) {
+        setPickerContext(assignmentPickerContext(groupId, tabId));
+        void refresh();
+        setPicker(true);
+        return;
+      }
+      sendCommand({ type: "select-tab", groupId, tabId });
+      return;
+    }
     const selectedGroup = workspaceRef.current.groups.find((item) => item.id === groupId);
     if (!selectedGroup) return;
     const next = selectTab(selectedGroup, tabId);
-    setWorkspace((current) => applyWorkspaceCommand(current, { type: "select-tab", groupId, tabId }));
     const target = next.tabs.find((tab) => tab.id === tabId);
     if (!target?.runtimeWindowId) { setPickerContext(assignmentPickerContext(groupId, tabId)); void refresh(); setPicker(true); return; }
-    try { if (target.status === "minimized") await windowBackend.restore(target.runtimeWindowId); await windowBackend.activate(target.runtimeWindowId); await windowBackend.raiseGroupHost(groupId); }
-    catch (reason) { const message = reason instanceof Error ? reason.message : "ウィンドウを前面化できませんでした。"; recordDiagnostic("error", message); setError(message); }
+    try {
+      // Selection only changes visibility and focus. Ownership/layout sync is
+      // reserved for group mutations so selecting a tab cannot reparent or
+      // resize unrelated child windows.
+      await windowBackend.focusGroupTab(groupId, target.runtimeWindowId);
+      setWorkspace((current) => applyWorkspaceCommand(current, { type: "select-tab", groupId, tabId }));
+    }
+    catch (reason) { const message = reason instanceof Error ? reason.message : "選択したタブへフォーカスを移せませんでした。"; recordDiagnostic("error", message); setError(message); }
   };
   const add = async (windowInfo: WindowInfo, targetGroupId?: string, targetAssigningTabId?: string, targetCreatingGroup = false) => {
     if (!isController) {
@@ -530,14 +638,45 @@ function App() {
     }
     if (targetGroup && !targetCreatingGroup) {
       if (groupForWindow(workspaceRef.current, windowInfo.id)) return;
-      const anchorId = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId ?? targetGroup.tabs.find((tab) => tab.runtimeWindowId)?.runtimeWindowId;
-      const anchor = windows.find((item) => item.id === anchorId);
-      if (anchor && anchor.id !== windowInfo.id) { await setFrame(windowInfo.id, anchor.frame); await pinBarTo(anchor.frame); }
-      setWorkspace((current) => addWindowToGroup(current, targetGroup.id, windowInfo));
+      try {
+        // Make the native side authoritative before publishing the new tab to
+        // secondary hosts.  Otherwise a failed SetParent could leave React
+        // showing a tab whose HWND is still standalone.
+        await windowBackend.openGroupHost(targetGroup.id);
+        const nextWorkspace = addWindowToGroup(workspaceRef.current, targetGroup.id, windowInfo);
+        const nextGroup = nextWorkspace.groups.find((item) => item.id === targetGroup.id);
+        if (!nextGroup) throw new Error("グループが見つかりません。");
+        const anchorId = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId)?.runtimeWindowId ?? targetGroup.tabs.find((tab) => tab.runtimeWindowId)?.runtimeWindowId;
+        const anchor = windowsRef.current.find((item) => item.id === anchorId);
+        await windowBackend.syncGroupHost(
+          targetGroup.id,
+          nextGroup.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []),
+          nextGroup.tabs.find((tab) => tab.id === nextGroup.activeTabId)?.runtimeWindowId ?? null,
+          anchor?.frame ?? windowInfo.frame,
+        );
+        setWorkspace((current) => addWindowToGroup(current, targetGroup.id, windowInfo));
+        try { await windowBackend.focusGroupTab(targetGroup.id, windowInfo.id); }
+        catch (reason) { const message = reason instanceof Error ? reason.message : "追加したタブへフォーカスを移せませんでした。"; recordDiagnostic("error", message); setError(message); }
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : "このウィンドウをタブ内へ統合できませんでした。";
+        recordDiagnostic("error", message);
+        setError(message);
+        return;
+      }
     } else {
-      await pinBarTo(windowInfo.frame, displays.find((display) => display.id === windowInfo.displayId));
       const created = newGroup(windowInfo, normalizeFrame(windowInfo.frame, displays.find((display) => display.id === windowInfo.displayId)));
-      setWorkspace((current) => addGroup(current, created));
+      try {
+        await windowBackend.openGroupHost(created.id);
+        await windowBackend.syncGroupHost(created.id, [windowInfo.id], windowInfo.id, windowInfo.frame);
+        setWorkspace((current) => addGroup(current, created));
+      } catch (reason) {
+        let message = reason instanceof Error ? reason.message : "このウィンドウをグループ化できませんでした。";
+        try { await windowBackend.closeGroupHost(created.id); }
+        catch (rollbackReason) { message += `（作成したホストを戻せませんでした: ${rollbackReason instanceof Error ? rollbackReason.message : String(rollbackReason)}）`; }
+        recordDiagnostic("error", message);
+        setError(message);
+        return;
+      }
     }
     setPickerContext(closedPickerContext()); setPicker(false);
   };
@@ -564,34 +703,192 @@ function App() {
     const destination = displays[(current + direction + displays.length) % displays.length];
     const frame = denormalizeFrame(target.frame, destination);
     await Promise.all(target.tabs.flatMap((tab) => tab.runtimeWindowId ? [setFrame(tab.runtimeWindowId, frame)] : []));
-    await pinBarTo(frame);
+    await pinGroupTo(frame);
     setWorkspace((currentWorkspace) => ({ ...currentWorkspace, groups: currentWorkspace.groups.map((item) => item.id === groupId ? { ...item, displayId: destination.id } : item) }));
   };
   const moveTab = async (sourceGroupId: string, tabId: string, destinationGroupId: string) => {
-    const source = workspaceRef.current.groups.find((item) => item.id === sourceGroupId);
-    const destination = workspaceRef.current.groups.find((item) => item.id === destinationGroupId);
+    const currentWorkspace = workspaceRef.current;
+    const source = currentWorkspace.groups.find((item) => item.id === sourceGroupId);
+    const destination = currentWorkspace.groups.find((item) => item.id === destinationGroupId);
     const tab = source?.tabs.find((item) => item.id === tabId);
-    const display = destination && (displaysRef.current.find((item) => item.id === destination.displayId) ?? displaysRef.current.find((item) => item.primary));
-    if (!source || !destination || !tab || !display) return;
-    if (tab.runtimeWindowId) await setFrame(tab.runtimeWindowId, denormalizeFrame(destination.frame, display));
-    setWorkspace((current) => moveTabToGroup(current, sourceGroupId, tabId, destinationGroupId));
+    if (!source || !destination || !tab) return;
+    const nextWorkspace = moveTabToGroup(currentWorkspace, sourceGroupId, tabId, destinationGroupId);
+    if (nextWorkspace === currentWorkspace) return;
+    if (!tab.runtimeWindowId) {
+      setWorkspace((current) => moveTabToGroup(current, sourceGroupId, tabId, destinationGroupId));
+      return;
+    }
+    const sourceAfter = nextWorkspace.groups.find((item) => item.id === sourceGroupId);
+    const destinationAfter = nextWorkspace.groups.find((item) => item.id === destinationGroupId);
+    if (!destinationAfter) return;
+    try {
+      // Move both sides under one native transaction.  This keeps the old
+      // parent and the old workspace ownership intact when SetParent fails.
+      await Promise.all([windowBackend.openGroupHost(source.id), windowBackend.openGroupHost(destination.id)]);
+      await windowBackend.syncGroupHosts([
+        hostSyncRequest(sourceAfter ?? { ...source, tabs: [], activeTabId: undefined }),
+        hostSyncRequest(destinationAfter),
+      ]);
+      if (!sourceAfter) await windowBackend.closeGroupHost(source.id);
+      setWorkspace((current) => moveTabToGroup(current, sourceGroupId, tabId, destinationGroupId));
+    } catch (reason) {
+      let message = reason instanceof Error ? reason.message : "タブを別のグループへ移動できませんでした。";
+      if (!sourceAfter) {
+        try {
+          // If the source became empty, closeGroupHost is the last native
+          // step.  Re-apply the old two-host layout if that step failed.
+          await windowBackend.openGroupHost(source.id);
+          await windowBackend.syncGroupHosts([hostSyncRequest(source), hostSyncRequest(destination)]);
+        } catch (rollbackReason) {
+          message += `（移動前の状態へ戻せませんでした: ${rollbackReason instanceof Error ? rollbackReason.message : String(rollbackReason)}）`;
+        }
+      }
+      recordDiagnostic("error", message);
+      setError(message);
+    }
   };
   const moveSelectedTab = (destinationGroupId: string) => {
     if (!group?.activeTabId) return;
     if (!isController) { sendCommand({ type: "move-tab", groupId: group.id, tabId: group.activeTabId, destinationGroupId }); return; }
     void moveTab(group.id, group.activeTabId, destinationGroupId); setMenuOpen(false);
   };
+  const releaseTab = async (groupId: string, tabId: string) => {
+    const currentWorkspace = workspaceRef.current;
+    const source = currentWorkspace.groups.find((item) => item.id === groupId);
+    const tab = source?.tabs.find((item) => item.id === tabId);
+    if (!source || !tab?.runtimeWindowId) return;
+    const nextWorkspace = applyWorkspaceCommand(currentWorkspace, { type: "release-tab", groupId, tabId });
+    if (nextWorkspace === currentWorkspace) return;
+    try {
+      if (source.tabs.length === 1) {
+        await windowBackend.closeGroupHost(groupId);
+      } else {
+        const remaining = nextWorkspace.groups.find((item) => item.id === groupId);
+        if (!remaining) throw new Error("グループの更新先が見つかりません。");
+        await windowBackend.openGroupHost(groupId);
+        await windowBackend.syncGroupHost(groupId, remaining.tabs.flatMap((item) => item.runtimeWindowId ? [item.runtimeWindowId] : []), remaining.tabs.find((item) => item.id === remaining.activeTabId)?.runtimeWindowId ?? null, hostSyncRequest(remaining).frame);
+      }
+      setWorkspace((current) => applyWorkspaceCommand(current, { type: "release-tab", groupId, tabId }));
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "タブをグループから外せませんでした。";
+      recordDiagnostic("error", message);
+      setError(message);
+    }
+  };
+  const detachTabFromGroup = async (groupId: string, tabId: string) => {
+    const currentWorkspace = workspaceRef.current;
+    const source = currentWorkspace.groups.find((item) => item.id === groupId);
+    const tab = source?.tabs.find((item) => item.id === tabId);
+    if (!source || !tab) return;
+    const nextWorkspace = detachTab(currentWorkspace, groupId, tabId);
+    if (nextWorkspace === currentWorkspace) return;
+    if (!tab.runtimeWindowId) {
+      setWorkspace(nextWorkspace);
+      return;
+    }
+    const detached = nextWorkspace.groups.find((item) => !currentWorkspace.groups.some((candidate) => candidate.id === item.id));
+    const sourceAfter = nextWorkspace.groups.find((item) => item.id === groupId);
+    if (!detached) return;
+    try {
+      await Promise.all([windowBackend.openGroupHost(source.id), windowBackend.openGroupHost(detached.id)]);
+      await windowBackend.syncGroupHosts([
+        hostSyncRequest(sourceAfter ?? { ...source, tabs: [], activeTabId: undefined }),
+        hostSyncRequest(detached),
+      ]);
+      if (!sourceAfter) await windowBackend.closeGroupHost(source.id);
+      const activeGroupId = sourceAfter ? source.id : currentWorkspace.groups.find((item) => item.id !== source.id)?.id;
+      setWorkspace({ ...nextWorkspace, activeGroupId: activeGroupId ?? nextWorkspace.activeGroupId });
+    } catch (reason) {
+      let message = reason instanceof Error ? reason.message : "タブを切り離せませんでした。";
+      try {
+        if (!sourceAfter) {
+          await windowBackend.openGroupHost(source.id);
+          await windowBackend.syncGroupHosts([
+            hostSyncRequest(source),
+            hostSyncRequest({ ...detached, tabs: [], activeTabId: undefined }),
+          ]);
+        }
+        // The detached host did not exist before this operation.  Close it
+        // after the native transaction rolls back so a failed detach cannot
+        // leave an orphaned empty window.
+        await windowBackend.closeGroupHost(detached.id);
+      } catch (rollbackReason) {
+        message += `（切り離し前の状態へ戻せませんでした: ${rollbackReason instanceof Error ? rollbackReason.message : String(rollbackReason)}）`;
+      }
+      recordDiagnostic("error", message);
+      setError(message);
+    }
+  };
+  const dissolveGroupWithNative = async (groupId: string) => {
+    if (!workspaceRef.current.groups.some((item) => item.id === groupId)) return;
+    try {
+      // Restore all child HWNDs before removing the workspace ownership.
+      await windowBackend.closeGroupHost(groupId);
+      setWorkspace((current) => dissolveGroup(current, groupId));
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "グループを解除できませんでした。";
+      recordDiagnostic("error", message);
+      setError(message);
+    }
+  };
   const detachSelectedTab = () => {
     if (!group?.activeTabId) return;
     if (!isController) { sendCommand({ type: "detach-tab", groupId: group.id, tabId: group.activeTabId }); return; }
-    const next = detachTab(workspace, group.id, group.activeTabId!);
-    const sourceSurvives = group.tabs.length > 1;
-    const remainingActive = sourceSurvives ? group.id : workspace.groups.find((item) => item.id !== group.id)?.id;
-    setWorkspace({ ...next, activeGroupId: remainingActive ?? next.activeGroupId });
+    void detachTabFromGroup(group.id, group.activeTabId);
     setMenuOpen(false);
+  };
+  const createGroupFromStandaloneDrop = async (sourceWindow: WindowInfo, targetWindow: WindowInfo) => {
+    const currentWorkspace = workspaceRef.current;
+    const targetDisplay = displaysRef.current.find((item) => item.id === targetWindow.displayId);
+    const nextWorkspace = applyNativeDrop(currentWorkspace, sourceWindow, targetWindow, normalizeFrame(targetWindow.frame, targetDisplay));
+    const created = nextWorkspace.groups.find((item) => !currentWorkspace.groups.some((candidate) => candidate.id === item.id));
+    if (!created) return;
+    try {
+      await windowBackend.openGroupHost(created.id);
+      await windowBackend.syncGroupHost(
+        created.id,
+        created.tabs.flatMap((tab) => tab.runtimeWindowId ? [tab.runtimeWindowId] : []),
+        created.tabs.find((tab) => tab.id === created.activeTabId)?.runtimeWindowId ?? null,
+        hostSyncRequest(created).frame,
+      );
+      setWorkspace((current) => applyNativeDrop(current, sourceWindow, targetWindow, normalizeFrame(targetWindow.frame, targetDisplay)));
+    } catch (reason) {
+      let message = reason instanceof Error ? reason.message : "ウィンドウをグループ化できませんでした。";
+      try { await windowBackend.closeGroupHost(created.id); }
+      catch (rollbackReason) { message += `（作成したホストを戻せませんでした: ${rollbackReason instanceof Error ? rollbackReason.message : String(rollbackReason)}）`; }
+      recordDiagnostic("error", message);
+      setError(message);
+    }
+  };
+  const handleNativeDrop = async (sourceWindow: WindowInfo, targetWindow: WindowInfo) => {
+    const currentWorkspace = workspaceRef.current;
+    const sourceOwner = groupForWindow(currentWorkspace, sourceWindow.id);
+    const targetOwner = groupForWindow(currentWorkspace, targetWindow.id);
+    if (sourceOwner && targetOwner && sourceOwner.id !== targetOwner.id) {
+      const tab = sourceOwner.tabs.find((item) => item.runtimeWindowId === sourceWindow.id);
+      if (tab) await moveTab(sourceOwner.id, tab.id, targetOwner.id);
+      return;
+    }
+    if (sourceOwner && !targetOwner) {
+      await add(targetWindow, sourceOwner.id);
+      return;
+    }
+    if (!sourceOwner && targetOwner) {
+      await add(sourceWindow, targetOwner.id);
+      return;
+    }
+    // Two standalone windows have no existing ownership to transfer. Create
+    // their host and complete native sync before publishing the new group.
+    await createGroupFromStandaloneDrop(sourceWindow, targetWindow);
   };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && picker) {
+        event.preventDefault();
+        setPickerContext(closedPickerContext());
+        setPicker(false);
+        return;
+      }
       if (event.key === "Escape" && tabDrag) {
         tabDragCancelled.current = true;
         setTabDrag(null);
@@ -608,10 +905,24 @@ function App() {
           void select(tab.id);
         }
       }
+      if (event.ctrlKey && !event.altKey && event.key === "Tab" && group?.tabs.length) {
+        event.preventDefault();
+        const current = Math.max(0, group.tabs.findIndex((tab) => tab.id === group.activeTabId));
+        const offset = event.shiftKey ? -1 : 1;
+        const tab = group.tabs[(current + offset + group.tabs.length) % group.tabs.length];
+        void select(tab.id);
+      }
+      if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "w" && group) {
+        if (group.activeTabId) {
+          event.preventDefault();
+          if (isController) void releaseTab(group.id, group.activeTabId);
+          else sendCommand({ type: "release-tab", groupId: group.id, tabId: group.activeTabId });
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => { window.removeEventListener("keydown", onKeyDown, true); };
-  }, [workspace, tabDrag]);
+  }, [workspace, tabDrag, picker]);
   const renameSelectedTab = (groupId = group?.id, tabId = group?.activeTabId) => {
     if (!groupId || !tabId) return;
     if (!isController) { sendCommand({ type: "rename-tab", groupId, tabId }); return; }
@@ -628,14 +939,15 @@ function App() {
     const next = reconnectGroupExcluding(draft, refreshed.windows, occupied);
     const frame = geometry.frame;
     for (const tab of next.tabs) if (tab.runtimeWindowId && frame) await setFrame(tab.runtimeWindowId, frame);
-    if (frame) await pinBarTo(frame);
+    if (frame) await pinGroupTo(frame);
     setWorkspace((current) => addGroup(current, next));
     setMenuOpen(false); setPresetManager(false);
   };
-  const ungroup = (windowId: string | undefined) => {
-    if (!windowId || !group) return;
-    if (!isController) { sendCommand({ type: "ungroup", groupId: group.id, windowId }); return; }
-    setWorkspace((current) => ({ ...current, groups: current.groups.map((item) => item.id === group.id ? ungroupWindow(item, windowId) ?? item : item) }));
+  const closeTab = (windowId: string | undefined) => {
+    if (windowId) void windowBackend.closeWindow(windowId);
+  };
+  const closeGroupWindows = () => {
+    for (const tab of group?.tabs ?? []) if (tab.runtimeWindowId) void windowBackend.closeWindow(tab.runtimeWindowId);
   };
   const deletePreset = (presetId: string) => {
     if (!isController) { sendCommand({ type: "delete-preset", presetId }); return; }
@@ -644,7 +956,7 @@ function App() {
   const dissolveActiveGroup = () => {
     if (!group) return;
     if (!isController) { sendCommand({ type: "dissolve-group", groupId: group.id }); return; }
-    setWorkspace((current) => dissolveGroup(current, group.id));
+    void dissolveGroupWithNative(group.id);
     setMenuOpen(false);
   };
   const editPresetMatcher = (preset: Preset) => {
@@ -674,11 +986,14 @@ function App() {
       case "focus-group": focusGroup(command.groupId); break;
       case "reorder-tab": setWorkspace((state) => applyWorkspaceCommand(state, { type: "reorder-tab", groupId: command.groupId, sourceTabId: command.sourceTabId, destinationTabId: command.destinationTabId })); break;
       case "move-tab": void moveTab(command.groupId, command.tabId, command.destinationGroupId); break;
-      case "release-tab": setWorkspace((state) => applyWorkspaceCommand(state, { type: "release-tab", groupId: command.groupId, tabId: command.tabId })); break;
-      case "ungroup": setWorkspace((state) => applyWorkspaceCommand(state, { type: "ungroup", groupId: command.groupId, windowId: command.windowId })); break;
+      case "release-tab": void releaseTab(command.groupId, command.tabId); break;
+      case "ungroup": {
+        const target = current.groups.find((item) => item.id === command.groupId)?.tabs.find((item) => item.runtimeWindowId === command.windowId);
+        if (target) void releaseTab(command.groupId, target.id);
+        break;
+      }
       case "detach-tab": {
-        const next = applyWorkspaceCommand(current, { type: "detach-tab", groupId: command.groupId, tabId: command.tabId });
-        setWorkspace(next); break;
+        void detachTabFromGroup(command.groupId, command.tabId); break;
       }
       case "apply-preset": { const preset = presets.find((item) => item.id === command.presetId); if (preset) void applyPreset(preset); break; }
       case "host-moved": {
@@ -694,7 +1009,15 @@ function App() {
         setWorkspace((state) => ({ ...state, groups: state.groups.map((item) => item.id === target.id ? { ...item, displayId: display.id, frame: nextFrame } : item) }));
         break;
       }
-      case "dissolve-group": setWorkspace((state) => dissolveGroup(state, command.groupId)); break;
+      case "host-resized": {
+        const target = current.groups.find((item) => item.id === command.groupId);
+        const display = target && (displays.find((item) => item.id === target.displayId) ?? displays.find((item) => item.primary));
+        if (!target || !display) break;
+        const frame = { ...target.frame, width: command.width / display.workArea.width, height: command.height / display.workArea.height };
+        setWorkspace((state) => ({ ...state, groups: state.groups.map((item) => item.id === target.id ? { ...item, frame } : item) }));
+        break;
+      }
+      case "dissolve-group": void dissolveGroupWithNative(command.groupId); break;
       case "move-display": {
         const target = current.groups.find((item) => item.id === command.groupId);
         if (target) void moveGroupDisplay(command.direction, target.id);
@@ -717,15 +1040,14 @@ function App() {
 
   return <main className={isController ? "controller-shell" : "group-host"}>
     <section className={nativeDragId ? "tabbar native-drag" : "tabbar"} aria-label="window-tabs" onMouseDown={startHostDrag}>
-      <div className="group-menu"><button className="group-name" title={error ?? undefined} onClick={openNativeGroupMenu}>{group?.name ?? "新しいグループ"} <span>⌄</span></button>
-        {menuOpen && <div className="menu" role="menu"><button onClick={startNewGroup}>新しいグループ</button><button disabled={!group} onClick={() => saveCurrentPreset()}>現在のグループを保存…</button><button disabled={!group?.activeTabId} onClick={() => renameSelectedTab()}>選択タブの名前を変更…</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(-1)}>前の画面へ</button><button disabled={!group || displays.length < 2} onClick={() => void moveGroupDisplay(1)}>次の画面へ</button><button disabled={!group?.activeTabId} onClick={detachSelectedTab}>選択タブを新しいグループへ</button><button className="danger" disabled={!group} onClick={dissolveActiveGroup}>グループを解除</button><button onClick={() => { setMenuOpen(false); setPresetManager(true); if (!isController) sendCommand({ type: "open-preset-manager" }); }}>プリセットを管理…</button><button onClick={() => { setMenuOpen(false); setDiagnosticsOpen(true); }}>診断ログを表示…</button>{workspace.groups.length > 1 && <div className="menu-label">開いているグループ</div>}{workspace.groups.filter((item) => item.id !== group?.id).map((item) => <button key={item.id} onClick={() => focusGroup(item.id)}>{item.name}<small>{item.tabs.length} タブ</small></button>)}{group && workspace.groups.filter((item) => item.id !== group.id).length > 0 && <><div className="menu-label">選択タブを移動</div>{workspace.groups.filter((item) => item.id !== group.id).map((item) => <button key={`move-${item.id}`} onClick={() => moveSelectedTab(item.id)}>→ {item.name}<small>{item.tabs.length} タブ</small></button>)}</>}{presets.length > 0 && <div className="menu-label">保存済みプリセット</div>}{presets.map((preset) => <button key={preset.id} onClick={() => void applyPreset(preset)}>{preset.name}<small>{preset.tabs.length} タブ</small></button>)}</div>}
-      </div>
-      <div className="tabs" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event)}>{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event, tab.id)}><button draggable className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onDragStart={(event) => beginTabDrag(event, tab.id)} onDragEnd={() => endTabDrag({ groupId: group.id, tabId: tab.id })} onClick={() => void select(tab.id)} title={tab.status === "unresolved" ? "未接続" : `${tab.name}（ドラッグで並べ替え・移動）`}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" draggable={false} aria-label={`${tab.name} をグループから外す`} onClick={() => ungroup(tab.runtimeWindowId)}>×</button></div>)}</div>
+      <div className="tabs" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event)}>{group?.tabs.map((tab, index) => <div key={tab.id} className="tab-wrap" onDragOver={(event) => { if (tabDrag) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => completeTabDrop(event, tab.id)}><button draggable className={tab.id === group.activeTabId ? "tab active" : "tab"} aria-pressed={tab.id === group.activeTabId} aria-keyshortcuts={index < 9 ? `Ctrl+${index + 1}` : undefined} onDragStart={(event) => beginTabDrag(event, tab.id)} onDragEnd={() => endTabDrag({ groupId: group.id, tabId: tab.id })} onClick={() => void select(tab.id)} onAuxClick={(event) => { if (event.button === 1) closeTab(tab.runtimeWindowId); }} title={tab.status === "unresolved" ? "未接続" : `${tab.name}（ドラッグで並べ替え・移動）`}>{tab.status === "unresolved" && <i>○</i>}{tab.name}</button><button className="remove" draggable={false} aria-label={`${tab.name} を閉じる`} title="閉じる (Ctrl+W)" onClick={() => closeTab(tab.runtimeWindowId)}>×</button></div>)}</div>
       <button className="add" aria-label={commandGroup ? `${commandGroup.name} にウィンドウを追加` : "ウィンドウを追加"} aria-keyshortcuts="F8 Ctrl+Shift+A" title="ウィンドウを追加 (F8)" onClick={openWindowPicker}>＋</button>
-      {group && <button className="drag-handle" aria-label="グループ全体を移動" title="ドラッグ、または矢印キーでグループ全体を移動" onMouseDown={startGroupHandleDrag} onKeyDown={moveGroupHandleByKey}><span /><span /><span /></button>}
+      {group && error && <div className="host-error" role="status" title={error}>統合できません</div>}
+      <div className="window-drag-region" aria-hidden="true" />
+      {group && <><button className="group-menu-button" aria-label={`${group.name} のメニュー`} title={group.name} onClick={openNativeGroupMenu}>⋯</button><div className="window-controls"><button aria-label="最小化" title="最小化" onClick={() => void getCurrentWindow().minimize()}>—</button><button aria-label="最大化または元に戻す" title="最大化または元に戻す" onClick={() => void getCurrentWindow().toggleMaximize()}>□</button><button className="window-close" aria-label="グループを閉じる" title="すべてのタブを閉じる" onClick={closeGroupWindows}>×</button></div></>}
     </section>
     {isController && <p className="hint">{error ?? (nativeDragId ? "Ctrl を押したまま別の実ウィンドウへドロップすると、同じグループにまとめます。" : "＋ から開いているウィンドウを選んでグループを作成します。")}</p>}
-    {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加"><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : pickerContext.groupId ? `${workspace.groups.find((item) => item.id === pickerContext.groupId)?.name ?? "グループ"}へ追加` : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}
+    {picker && <div className="overlay" role="dialog" aria-modal="true" aria-label="ウィンドウを追加" onMouseDown={(event) => { if (event.target === event.currentTarget) { setPickerContext(closedPickerContext()); setPicker(false); } }}><section className="picker"><header><div><p className="eyebrow">OPEN WINDOWS</p><h1>{pickerContext.assigningTabId ? "候補ウィンドウを割り当て" : pickerContext.groupId ? `${workspace.groups.find((item) => item.id === pickerContext.groupId)?.name ?? "グループ"}へ追加` : "ウィンドウを追加"}</h1></div><button aria-label="閉じる" onClick={() => { setPickerContext(closedPickerContext()); setPicker(false); }}>×</button></header><div className="window-list">{windows.filter((windowInfo) => !connectedIds.has(windowInfo.id)).map((windowInfo) => <button key={windowInfo.id} onClick={() => void add(windowInfo, pickerContext.groupId, pickerContext.assigningTabId, pickerContext.creatingGroup)}><span className="app-mark">{windowInfo.appName.slice(0, 1).toUpperCase()}</span><span><strong>{windowInfo.title || "無題のウィンドウ"}</strong><small>{windowInfo.appName}</small></span></button>)}{windows.length === 0 && <p className="empty">追加できるウィンドウがありません。</p>}</div></section></div>}
     {presetManager && <div className="overlay" role="dialog" aria-modal="true" aria-label="プリセットを管理"><section className="picker preset-manager"><header><div><p className="eyebrow">SAVED LAYOUTS</p><h1>プリセットを管理</h1></div><button aria-label="閉じる" onClick={() => setPresetManager(false)}>×</button></header><div className="preset-list">{presets.map((preset) => <article key={preset.id}><div><strong>{preset.name}</strong><small>{preset.tabs.length} タブ · 最終更新 {new Date(preset.updatedAt).toLocaleString()}</small></div><div><button className="secondary" onClick={() => void applyPreset(preset)}>適用</button><button className="secondary" onClick={() => editPresetMatcher(preset)}>条件…</button><button className="danger" onClick={() => deletePreset(preset.id)}>削除</button></div></article>)}{presets.length === 0 && <p className="empty">保存済みプリセットはありません。グループ名メニューから保存できます。</p>}</div></section></div>}
     {diagnosticsOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="診断ログ"><section className="picker preset-manager"><header><div><p className="eyebrow">DIAGNOSTICS</p><h1>診断ログ</h1></div><button aria-label="閉じる" onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="preset-list">{diagnostics().map((entry, index) => <article key={`${entry.at}-${index}`}><div><strong>{entry.level.toUpperCase()}</strong><small>{entry.at} · {entry.message}</small></div></article>)}{diagnostics().length === 0 && <p className="empty">このセッションではエラーは記録されていません。</p>}</div></section></div>}
     {updateOpen && <div className="overlay" role="dialog" aria-modal="true" aria-label="更新"><section className="picker preset-manager"><header><div><p className="eyebrow">APPLICATION UPDATE</p><h1>window-tabs の更新</h1></div><button aria-label="閉じる" onClick={() => setUpdateOpen(false)}>×</button></header><div className="update-panel">
@@ -733,7 +1055,7 @@ function App() {
       {updateState.status === "up-to-date" && <p>最新バージョンを使用しています。</p>}
       {updateState.status === "available" && <><p><strong>{updateState.version}</strong> が利用できます。</p>{updateState.notes && <p className="update-notes">{updateState.notes}</p>}<button onClick={() => updater.current && void updater.current.download(applyUpdateState)}>更新をダウンロード</button></>}
       {updateState.status === "downloading" && <p>署名付き更新をダウンロードしています…</p>}
-      {updateState.status === "ready" && <><p>{updateState.version} のダウンロードが完了しました。インストールすると Windows updater が window-tabs を終了し、更新後に再起動します。</p><button onClick={() => updater.current && void updater.current.install(applyUpdateState)}>インストールして再起動</button></>}
+      {updateState.status === "ready" && <><p>{updateState.version} のダウンロードが完了しました。インストールすると Windows updater が window-tabs を終了し、更新後に再起動します。</p><button onClick={() => void installUpdate()}>インストールして再起動</button></>}
       {updateState.status === "installing" && <p>更新をインストールしています…</p>}
       {updateState.status === "error" && <><p className="error">更新できませんでした。現在のバージョンはそのまま使用できます。</p><p className="update-notes">{updateState.error}</p><button className="secondary" onClick={() => void openUrl(RELEASES_URL)}>Releaseページを開く</button></>}
       {updateState.status === "idle" && <button onClick={() => checkForUpdates(true)}>更新を確認</button>}
