@@ -402,7 +402,8 @@ function App() {
         return;
       }
       if (payload.ctrl && payload.key === 0x57) {
-        if (targetGroup.activeTabId) void releaseTab(targetGroup.id, targetGroup.activeTabId);
+        const target = targetGroup.tabs.find((tab) => tab.id === targetGroup.activeTabId);
+        if (target?.runtimeWindowId) closeTab(target.runtimeWindowId);
         return;
       }
       if (payload.key === 0x77 || (payload.ctrl && payload.shift && payload.key === 0x41)) {
@@ -913,10 +914,10 @@ function App() {
         void select(tab.id);
       }
       if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "w" && group) {
-        if (group.activeTabId) {
+        const target = group.tabs.find((tab) => tab.id === group.activeTabId);
+        if (target?.runtimeWindowId) {
           event.preventDefault();
-          if (isController) void releaseTab(group.id, group.activeTabId);
-          else sendCommand({ type: "release-tab", groupId: group.id, tabId: group.activeTabId });
+          closeTab(target.runtimeWindowId);
         }
       }
     };
