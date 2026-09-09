@@ -145,10 +145,7 @@ mod windows_backend {
                 SetThreadDpiHostingBehavior, DPI_AWARENESS_INVALID, DPI_HOSTING_BEHAVIOR,
                 DPI_HOSTING_BEHAVIOR_INVALID, DPI_HOSTING_BEHAVIOR_MIXED,
             },
-            Input::KeyboardAndMouse::{
-                GetAsyncKeyState, GetKeyState, SetActiveWindow, SetFocus, VK_CONTROL, VK_MENU,
-                VK_SHIFT, VK_TAB,
-            },
+            Input::KeyboardAndMouse::{GetKeyState, SetActiveWindow, SetFocus, VK_CONTROL, VK_TAB},
             WindowsAndMessaging::*,
         },
     };
@@ -795,6 +792,8 @@ mod windows_backend {
             0xA3 => Some(2),
             0xA0 => Some(4),
             0xA1 => Some(8),
+            0xA4 => Some(16),
+            0xA5 => Some(32),
             _ => None,
         };
         if let Some(bit) = bit {
@@ -805,14 +804,13 @@ mod windows_backend {
             }
         }
     }
-    fn modifier_state() -> (bool, bool) {
+    fn modifier_state() -> (bool, bool, bool) {
         let tracked = MODIFIER_STATE.load(Ordering::Relaxed);
-        unsafe {
-            (
-                tracked & 0b0011 != 0 || GetAsyncKeyState(VK_CONTROL.0 as i32) < 0,
-                tracked & 0b1100 != 0 || GetAsyncKeyState(VK_SHIFT.0 as i32) < 0,
-            )
-        }
+        (
+            tracked & 0b0011 != 0,
+            tracked & 0b1100 != 0,
+            tracked & 0b110000 != 0,
+        )
     }
     unsafe extern "system" fn on_keyboard_event(
         code: i32,
@@ -828,8 +826,11 @@ mod windows_backend {
                 update_modifier_state(key, key_down);
             }
             if key_down {
-                let (ctrl, shift) = modifier_state();
-                let alt = GetAsyncKeyState(VK_MENU.0 as i32) < 0;
+                let (ctrl, shift, tracked_alt) = modifier_state();
+                // LowLevelKeyboardProc runs before Windows updates async key
+                // state. Use the hook's own modifier tracking and the
+                // LLKHF_ALTDOWN flag instead of querying async key state here.
+                let alt = tracked_alt || keyboard.flags.0 & 0x20 != 0;
                 let is_tab = key == VK_TAB.0 as u32 && ctrl && !alt;
                 let is_number_or_close =
                     ctrl && !shift && !alt && ((0x31..=0x39).contains(&key) || key == 0x57);
@@ -1245,106 +1246,94 @@ mod windows_backend {
         Ok(())
     }
     #[tauri::command]
-    pub fn focus_group_tab(
-        _app: tauri::AppHandle,
-        group_id: String,
-        window_id: String,
-    ) -> Result<(), String> {
-        let host = groups()
-            .lock()
-            .map_err(|_| "group registry is unavailable")?
-            .hosts
-            .get(&group_id)
-            .copied()
-            .map(|host| HWND(host as *mut c_void))
-            .ok_or_else(|| "group host is unavailable".to_string())?;
-        let window = hwnd(&window_id)?;
-        let owned = groups()
-            .lock()
-            .map_err(|_| "group registry is unavailable")?
-            .hosted
-            .get(&(window.0 as usize))
-            .is_some_and(|saved| saved.group_id == group_id);
-        if !owned {
-            return Err("window is not owned by the requested group".into());
-        }
-        unsafe {
-            if !IsWindow(host).as_bool() || !IsWindow(window).as_bool() {
-                return Err("group host or tab no longer exists".into());
-            }
-            if GetParent(window).unwrap_or_default().0 != host.0 {
-                return Err("tab is not attached to the requested group host".into());
-            }
-            let host_raw = host.0 as usize;
-            let window_raw = window.0 as usize;
-            let focus_group_id = group_id.clone();
-            let sibling_raw = groups()
+    pub async fn focus_group_tab(group_id: String, window_id: String) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            // Focus changes are native mutations too. Serialize them with
+            // host sync/restore so a fast sequence of tab selections cannot
+            // apply stale visibility or focus after ownership has changed.
+            let _mutation = host_mutations()
+                .lock()
+                .map_err(|_| "host mutation lock is unavailable")?;
+            let host = groups()
+                .lock()
+                .map_err(|_| "group registry is unavailable")?
+                .hosts
+                .get(&group_id)
+                .copied()
+                .map(|host| HWND(host as *mut c_void))
+                .ok_or_else(|| "group host is unavailable".to_string())?;
+            let window = hwnd(&window_id)?;
+            let owned = groups()
                 .lock()
                 .map_err(|_| "group registry is unavailable")?
                 .hosted
-                .iter()
-                .filter_map(|(raw, saved)| (saved.group_id == group_id).then_some(*raw))
-                .collect::<Vec<_>>();
-            thread::spawn(move || {
-                let host = HWND(host_raw as *mut c_void);
-                let window = HWND(window_raw as *mut c_void);
-                let result = (|| -> Result<(), String> {
-                    // Do not wait for an external window's input queue from a
-                    // Tauri command or its main thread. A broken/hung child
-                    // must not freeze the controller while Windows resolves
-                    // SetFocus across processes.
-                    for raw in sibling_raw {
-                        let sibling = HWND(raw as *mut c_void);
-                        let active = raw == window_raw;
-                        let _ = ShowWindow(sibling, if active { SW_SHOWNA } else { SW_HIDE });
-                        if IsWindowVisible(sibling).as_bool() != active {
-                            return Err("tab visibility did not update".into());
-                        }
-                    }
-                    let host_thread = GetWindowThreadProcessId(host, None);
-                    let window_thread = GetWindowThreadProcessId(window, None);
-                    let current_thread = GetCurrentThreadId();
-                    let mut attached = Vec::new();
-                    for thread_id in [host_thread, window_thread] {
-                        if thread_id != 0
-                            && thread_id != current_thread
-                            && !attached.contains(&thread_id)
-                        {
-                            if !AttachThreadInput(current_thread, thread_id, true).as_bool() {
-                                for attached_thread in attached.into_iter().rev() {
-                                    let _ =
-                                        AttachThreadInput(current_thread, attached_thread, false);
-                                }
-                                return Err("could not attach to the tab input queue".into());
-                            }
-                            attached.push(thread_id);
-                        }
-                    }
-                    let result = (|| {
-                        if IsIconic(host).as_bool() {
-                            let _ = ShowWindow(host, SW_RESTORE);
-                        }
-                        if !SetForegroundWindow(host).as_bool() {
-                            return Err("Windows rejected group host activation".to_string());
-                        }
-                        let _ = SetActiveWindow(host);
-                        SetFocus(window).map_err(|error| format!("SetFocus failed: {error}"))?;
-                        Ok(())
-                    })();
-                    for attached_thread in attached.into_iter().rev() {
-                        let _ = AttachThreadInput(current_thread, attached_thread, false);
-                    }
-                    result
-                })();
-                if let Err(error) = result {
-                    if let Some(app) = EVENT_APP.get() {
-                        let _ =
-                            app.emit("group-focus-failed", format!("{focus_group_id}: {error}"));
+                .get(&(window.0 as usize))
+                .is_some_and(|saved| saved.group_id == group_id);
+            if !owned {
+                return Err("window is not owned by the requested group".into());
+            }
+            unsafe {
+                if !IsWindow(host).as_bool() || !IsWindow(window).as_bool() {
+                    return Err("group host or tab no longer exists".into());
+                }
+                if GetParent(window).unwrap_or_default().0 != host.0 {
+                    return Err("tab is not attached to the requested group host".into());
+                }
+                let window_raw = window.0 as usize;
+                let sibling_raw = groups()
+                    .lock()
+                    .map_err(|_| "group registry is unavailable")?
+                    .hosted
+                    .iter()
+                    .filter_map(|(raw, saved)| (saved.group_id == group_id).then_some(*raw))
+                    .collect::<Vec<_>>();
+                // Keep the lock until every native mutation has completed so
+                // sync/restore cannot invalidate this sibling snapshot.
+                for raw in sibling_raw {
+                    let sibling = HWND(raw as *mut c_void);
+                    let active = raw == window_raw;
+                    let _ = ShowWindow(sibling, if active { SW_SHOWNA } else { SW_HIDE });
+                    if IsWindowVisible(sibling).as_bool() != active {
+                        return Err("tab visibility did not update".into());
                     }
                 }
-            });
-            Ok(())
-        }
+                let host_thread = GetWindowThreadProcessId(host, None);
+                let window_thread = GetWindowThreadProcessId(window, None);
+                let current_thread = GetCurrentThreadId();
+                let mut attached = Vec::new();
+                for thread_id in [host_thread, window_thread] {
+                    if thread_id != 0
+                        && thread_id != current_thread
+                        && !attached.contains(&thread_id)
+                    {
+                        if !AttachThreadInput(current_thread, thread_id, true).as_bool() {
+                            for attached_thread in attached.into_iter().rev() {
+                                let _ = AttachThreadInput(current_thread, attached_thread, false);
+                            }
+                            return Err("could not attach to the tab input queue".into());
+                        }
+                        attached.push(thread_id);
+                    }
+                }
+                let result = (|| {
+                    if IsIconic(host).as_bool() {
+                        let _ = ShowWindow(host, SW_RESTORE);
+                    }
+                    if !SetForegroundWindow(host).as_bool() {
+                        return Err("Windows rejected group host activation".to_string());
+                    }
+                    let _ = SetActiveWindow(host);
+                    SetFocus(window).map_err(|error| format!("SetFocus failed: {error}"))?;
+                    Ok(())
+                })();
+                for attached_thread in attached.into_iter().rev() {
+                    let _ = AttachThreadInput(current_thread, attached_thread, false);
+                }
+                result
+            }
+        })
+        .await
+        .map_err(|error| format!("focus worker failed: {error}"))?
     }
 }
 
@@ -1399,11 +1388,7 @@ mod windows_backend {
         Err("Windows backend is unavailable on this platform".into())
     }
     #[tauri::command]
-    pub fn focus_group_tab(
-        _app: tauri::AppHandle,
-        _group_id: String,
-        _window_id: String,
-    ) -> Result<(), String> {
+    pub async fn focus_group_tab(_group_id: String, _window_id: String) -> Result<(), String> {
         Err("Windows backend is unavailable on this platform".into())
     }
     pub fn restore_all_groups() -> Result<(), String> {
