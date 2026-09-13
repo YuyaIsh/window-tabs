@@ -4,8 +4,8 @@ Status: **IN REVIEW**
 
 ## Implemented
 
-- Tauri, React, TypeScript, and Rust application shell with a compact floating
-  tab-bar surface.
+- Tauri, React, TypeScript, and Rust application shell with an integrated
+  native group-host surface: tab strip above the active external child window.
 - OS-neutral TypeScript models for runtime windows, groups, tabs, matching
   rules, normalized frames, and persisted presets.
 - Tauri command boundary between React UI and the Windows implementation.
@@ -46,9 +46,10 @@ Status: **IN REVIEW**
 
 ## Review findings
 
-- P2 — Each additional group now opens its own compact native tab-bar host;
-  group state is synchronized in-process and runtime IDs are not persisted.
-  End-to-end multi-host interaction still requires Windows 10 verification.
+- P2 — Each group now opens its own integrated native group host; group state is
+  synchronized in-process and runtime IDs are not persisted. End-to-end
+  multi-host interaction, child restore, and task-switcher semantics still
+  require Windows 10 verification.
 - P2 — Manual Windows 10 scenarios remain required under the user-authorized
   implementation-continuation exception recorded for Phase 0.
 

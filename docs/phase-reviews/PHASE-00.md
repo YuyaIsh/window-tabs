@@ -18,9 +18,11 @@ manual checks are completed.
 - `watch` uses `SetWinEventHook` for foreground, move/resize, create, destroy,
   location, minimize, and restore events. It reports Ctrl state at move start
   and resolves the top-level drop target at move end.
-- `host` creates a `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE` native tab-bar probe,
-  places it topmost with `SetWindowPos`, and returns focus to its configured
-  target on click.
+- `host` creates a native group-host probe with a tab strip above the hosted
+  content, and returns focus to its configured target on click. The product
+  implementation additionally uses `SetParent` / `WS_CHILD`, mixed-DPI
+  preflight, and restore-on-exit; those paths remain subject to the manual
+  checks below.
 - `monitors` reports each monitor work area and effective DPI.
 
 ## Automated checks
@@ -56,13 +58,13 @@ with the observed result and any command output reference.
 | 3. Overlap windows at one frame | NOT RUN |
 | 4. Activate from tab-click-equivalent host | NOT RUN |
 | 5. Observe foreground/move/resize/create/destroy | NOT RUN |
-| 6. Task View / Alt+Tab keep real windows distinct | NOT RUN |
-| 7. Exclude host from Task View / Alt+Tab / taskbar | NOT RUN |
-| 8. Return focus from host to target | NOT RUN |
+| 6. Group host is one Task View / Alt+Tab / taskbar unit | NOT RUN |
+| 7. Restore hosted child parent/style/frame on host close | NOT RUN |
+| 8. Return focus from host to active child | NOT RUN |
 | 9. Detect Ctrl + real-window D&D | NOT RUN |
 | 10. Identify D&D drop target | NOT RUN |
 | 11. Track maximize / restore / Snap frame | NOT RUN |
-| 12. Validate mixed-DPI coordinate approach | NOT RUN |
+| 12. Validate mixed-DPI hosting / fail-closed behavior | NOT RUN |
 
 ## Review findings
 

@@ -121,6 +121,12 @@ Approval
 - unresolved P0-P2: 0
 ```
 
+## Windows v1 architecture update
+
+実装の主設計は、当初の「タブバーを対象 window に追従させる」方式から、`SetParent` / `WS_CHILD` を使う integrated native group host 方式へ更新する。各 group は 1 つの枠なし top-level host を持ち、最上部に React tab strip、その下に active child window を表示する。inactive child は非表示にし、host を閉じる・解除する・アプリを終了する・updater を install する前には parent / style / exstyle / frame / visibility を復元する。host HWNDの作成はTauri main/event-loop threadへdispatchし、作成後に実HWNDのmixed-DPI hosting behaviorを検証する。
+
+この OS 境界をまたぐ mutation は、単一 group の追加だけでなく move / detach の複数 group を含め、transaction開始時点のnative state / registry ownershipのsnapshot → preflight → `WS_CHILD` style変更 → `SetParent` → size/visibility → registry commit の順に実行する。いずれかが失敗した場合は transaction開始時点へ rollback し、native 成功前に workspace / registry に部分的な ownership を commit しない。restore は `SetParent` を style 復元より先に行う。host / child の DPI context が無効、実HWNDのmixed-DPI hostingが利用不可、または権限境界で操作できない場合は fail closed とする。
+
 ## Phase 0: Windows feasibility spike
 
 ### Goal
@@ -134,13 +140,14 @@ Approval
 3. 複数ウィンドウを同じ位置・サイズへ移動できる
 4. タブクリック相当のユーザー操作から対象を前面化できる
 5. foreground / move / resize / create / destroy を監視できる
-6. 重なった管理対象が Task View / Alt+Tab では個別に扱われる
-7. 自作タブバー host を Task View / Alt+Tab / taskbar から実用上除外できる
-8. タブバー操作後に focus がタブバーへ残らず対象ウィンドウへ戻せる
-9. `Ctrl + 実ウィンドウ D&D` を検出できる
-10. D&D 中に drop target のトップレベルウィンドウを特定できる
-11. maximize / restore / Snap 後の frame を追跡できる
-12. DPI が異なるディスプレイ間の座標変換方針が成立する
+6. 複数 window を 1 つの integrated group host に組み込み、tab strip と active child を同じ frame に表示できる
+7. group host を Task View / Alt+Tab / taskbar の 1 つの通常 window として扱える
+8. host 終了時に child の parent / style / exstyle / frame を復元できる
+9. native mutation の失敗時に registry と native state を rollback できる
+10. `Ctrl + 実ウィンドウ D&D` を検出できる
+11. D&D 中に drop target のトップレベルウィンドウを特定できる
+12. maximize / restore / Snap 後の frame を追跡できる
+13. 実際に生成された host HWND の mixed-DPI hosting behavior 検証と、unsupported window の fail-closed が成立する
 
 ### Approach
 
@@ -158,8 +165,11 @@ Windows 10 で基本確認する。
 - Terminal + Chrome
 - `Win + Tab` から背後の管理対象を選択
 - `Alt + Tab` から管理対象を選択
-- tab bar が taskbar に通常アプリとして出ない
-- tab bar click → 対象へ focus
+- group host が taskbar / Alt+Tab / Task View に 1 つだけ出る
+- tab click → active child の表示 / focus
+- group dissolve / app quit → child restore
+- restore failure → quit / updater install が中止され、controllerへエラーが表示される
+- SetParent / style / size の失敗を注入または観測し、partial group が残らない
 - maximize → restore
 - Windows 10: 通常の Snap
 - 可能なら DPI の異なる 2 画面間移動
@@ -168,7 +178,7 @@ Windows 10 の実機確認を実行できない場合、Phase 0 を `BLOCKED: MA
 
 ### APPROVE
 
-- 1〜12 の結果が phase review に記録されている
+- 1〜13 の結果と、restore failure時のquit/install gate結果が phase review に記録されている
 - Windows 10 の基本検証が PASS
 - 不成立項目があれば先に仕様 / architecture を修正している
 - v1 を阻害する未解決制約がない
@@ -197,7 +207,7 @@ Windows 実装を進めても macOS 追加時に共通部分を書き直さな�
   - frame get / set
   - window events
   - display enumerate / move
-  - tab bar native-host capability
+  - integrated group-host native capability
   - native-window drag events
 - Windows backend skeleton
 - macOS backend 用 boundary / cfg skeleton
@@ -240,9 +250,11 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - `+` Window Picker
 - task tray から new group / Window Picker を開く
 - window 単位で group へ追加
-- 同一 frame へ配置
+- integrated group host への組み込み（tab strip + active child）
+- child parent / style / frame の snapshot
 - GUI tab selection → activate
-- foreground event → active tab sync
+- child focus 中も native `Ctrl+Tab` / `Ctrl+1..9` / `Ctrl+W` / `F8` を処理
+- group host / active child の foreground event → active tab sync
 - 1 tab でも tab bar を維持
 - explicit ungroup
 - minimized state / restore
@@ -255,15 +267,17 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - Chrome 2 window を別 tab として追加
 - `+` から同一アプリの別 window を選択
 - task tray から group 作成
-- Task View / Alt+Tab / taskbar から選択 → active tab sync
+- Task View / Alt+Tab / taskbar から group host を選択 → active tab sync
 - 3 → 2 → 1 tab でも bar 維持
 - minimize → tab select → restore
+- タブ選択で inactive child が隠れ、選択 child が表示・focus される
 - window close 後も他 group が正常
 
 ### APPROVE
 
 - D&D なしで中心フローを日常利用できる
 - activate と foreground event の loop がない
+- tab selection / shortcut が full host sync による focus steal を起こさない
 - multiple groups で focus / state が混線しない
 
 ## Phase 3: D&D and group lifecycle
@@ -285,6 +299,8 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - cancel
 - modifier なしの通常 move は無視
 - Chrome tab 分離だけでは自動追加しない
+- native group host の mutation は snapshot / rollback 付きで行う
+- move / detach / release / dissolve は native 成功後に workspace ownership を commit する
 
 ### Behavior verification
 
@@ -315,6 +331,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - previous / next display command
 - normalized frame
 - DPI / scale conversion
+- mixed-DPI hosting preflight（不可なら fail closed）
 - display disconnect fallback
 - active window move / resize → group frame sync
 - maximize / restore
@@ -329,6 +346,7 @@ D&D / preset より先に、タブ管理の中心機能を完成させる。
 - Snap → tab switch
 - display disconnect / reconnect
 - resize propagation
+- mixed-DPI の Chrome + Terminal / Notion + Claude
 
 ### APPROVE
 
@@ -441,6 +459,8 @@ Windows 10で日常利用できる製品回帰に加え、public GitHub Release�
 - event debounce / coalescing
 - task tray regression
 - log / diagnostic access
+- updater install 前の全 group restore
+- restore / quit 後に hosted child が通常の top-level window へ戻ること
 
 ### Regression matrix
 
@@ -453,6 +473,7 @@ Windows 10で日常利用できる製品回帰に加え、public GitHub Release�
 - 1-tab group
 - unresolved preset group
 - 0-connected waiting preset
+- grouped windows N → N+1 update の復元・再起動
 
 Windows 10 で実施する。
 
@@ -461,6 +482,7 @@ Windows 10 で実施する。
 - clean WindowsへNSIS install、installed tray app起動、uninstall
 - public Release assetと`latest.json`を未認証download
 - version NからN+1を検知し、署名検証後にuser操作でinstall（Windowsの再起動はupdater installerへ委譲）
+- install 直前に controller が全 group の child を復元し、updater installer の process exit 後も対象 app が通常 window として残る
 - update後もpreset/settings保持
 - metadata/network/signature/download/install failureでNが利用可能
 - release workflowがNSIS/updater/signature/`latest.json`を再現
@@ -473,7 +495,7 @@ Windows 10 で実施する。
 - `SPEC.md` の Windows v1 complete conditions がすべて PASS
 - Windows 10 regression PASS
 - 日常利用を止める known defect が 0
-- Phase 0 で成立確認した Task View / tab bar host / D&D / Snap が製品コードでも PASS
+- Phase 0 で成立確認した integrated group host / Task View / D&D / Snap / rollback / mixed DPI が製品コードでも PASS
 - `docs/DISTRIBUTION.md` のrelease acceptanceがすべて実測PASS
 - unresolved code-review P0/P1/P2が0
 
